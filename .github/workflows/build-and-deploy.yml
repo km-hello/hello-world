@@ -42,44 +42,44 @@ jobs:
     needs: build
 
     steps:
-      # 5.1. 登录 TXY 服务器重新部署
-      - name: Executing remote ssh commands on txy server using private key
+      # 5.1. 登录 TX_SG_01 服务器重新部署
+      - name: Executing remote ssh commands on tx_sg_01 server using private key
         uses: appleboy/ssh-action@v1.2.2
         with:
-          host: ${{ secrets.TXY_HOST }}
-          port: ${{ secrets.TXY_PORT }}
-          username: ${{ secrets.TXY_USERNAME }}
-          key: ${{ secrets.TXY_KEY }}
+          host: ${{ secrets.TX_SG_01_HOST }}
+          port: ${{ secrets.TX_SG_01_PORT }}
+          username: ${{ secrets.TX_SG_01_USERNAME }}
+          key: ${{ secrets.TX_SG_01_KEY }}
           script: |
-            cd ${{ vars.TXY_PATH }}
+            cd ${{ vars.TX_SG_01_PATH }}
             sudo docker compose down
             sudo docker compose pull
             sudo docker compose up -d --remove-orphans
       
-      # 5.2. 登录 GCP 服务器重新部署
-      - name: Executing remote ssh commands on gcp server using private key
+      # 5.2. 登录 GC_US_01 服务器重新部署
+      - name: Executing remote ssh commands on gc_us_01 server using private key
         uses: appleboy/ssh-action@v1.2.2
         with:
-          host: ${{ secrets.GCP_HOST }}
-          port: ${{ secrets.GCP_PORT }}
-          username: ${{ secrets.GCP_USERNAME }}
-          key: ${{ secrets.GCP_KEY }}
+          host: ${{ secrets.GC_US_01_HOST }}
+          port: ${{ secrets.GC_US_01_PORT }}
+          username: ${{ secrets.GC_US_01_USERNAME }}
+          key: ${{ secrets.GC_US_01_KEY }}
           script: |
-            cd ${{ vars.GCP_PATH }}
+            cd ${{ vars.GC_US_01_PATH }}
             sudo docker compose down
             sudo docker compose pull
             sudo docker compose up -d --remove-orphans
 
-      # 5.3. 登录 ALY 服务器重新部署
-      - name: Executing remote ssh commands on aly server using private key
+      # 5.3. 登录 DM_US_01 服务器重新部署
+      - name: Executing remote ssh commands on dm_us_01 server using private key
         uses: appleboy/ssh-action@v1.2.2
         with:
-          host: ${{ secrets.ALY_HOST }}
-          port: ${{ secrets.ALY_PORT }}
-          username: ${{ secrets.ALY_USERNAME }}
-          key: ${{ secrets.ALY_KEY }}
+          host: ${{ secrets.DM_US_01_HOST }}
+          port: ${{ secrets.DM_US_01_PORT }}
+          username: ${{ secrets.DM_US_01_USERNAME }}
+          key: ${{ secrets.DM_US_01_KEY }}
           script: |
-            cd ${{ vars.ALY_PATH }}
+            cd ${{ vars.DM_US_01_PATH }}
             sudo docker compose down
             sudo docker compose pull
             sudo docker compose up -d --remove-orphans
