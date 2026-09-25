@@ -12,8 +12,8 @@ import { BodyVisuals } from "./body-visuals.js";
 import { MirrorMonument } from "./mirror-monument.js";
 import {
     getGlowScale,
-    getOffscreenOverflow,
     getPositionScale,
+    getRecoveryOverflow,
     MAX_RECOVERY_STALL_DURATION,
     updateRecoveryTracking,
 } from "./viewport.js";
@@ -26,47 +26,6 @@ const MAX_SUBSTEPS = 6;
 const CAMERA_DISTANCE = 6;
 const CAMERA_FOV = 42;
 const CAMERA_NEAR_DISTANCE = 0.05;
-const RECOVERY_DEPTH_GAIN = 2.1;
-const MIN_RECOVERY_PERSPECTIVE = 0.65;
-const MAX_RECOVERY_PERSPECTIVE = 1.62;
-const MIN_GLOW_RADIUS = 32;
-const MAX_RECOVERY_GLOW_RADIUS = 220;
-
-function clamp(value, minimum, maximum) {
-    return Math.min(maximum, Math.max(minimum, value));
-}
-
-function smoothstep(value) {
-    const normalized = clamp(value, 0, 1);
-    return normalized * normalized * (3 - 2 * normalized);
-}
-
-function getPerspective(positionZ, depthGain, minimum, maximum) {
-    const visualDepth = positionZ * depthGain;
-    const safeDepth = Math.min(visualDepth, CAMERA_DISTANCE - 0.5);
-
-    return clamp(
-        CAMERA_DISTANCE / (CAMERA_DISTANCE - safeDepth),
-        minimum,
-        maximum,
-    );
-}
-
-function getRecoveryPerspective(positionZ) {
-    return getPerspective(
-        positionZ,
-        RECOVERY_DEPTH_GAIN,
-        MIN_RECOVERY_PERSPECTIVE,
-        MAX_RECOVERY_PERSPECTIVE,
-    );
-}
-
-function getRecoveryDepthIntensity(perspective) {
-    return smoothstep(
-        (perspective - MIN_RECOVERY_PERSPECTIVE)
-        / (MAX_RECOVERY_PERSPECTIVE - MIN_RECOVERY_PERSPECTIVE),
-    );
-}
 
 export class MirrorMonumentScene {
     constructor(canvas) {
@@ -449,34 +408,19 @@ export class MirrorMonumentScene {
     }
 
     _updateOffscreenRecovery(frameDelta) {
-        const margin = Math.min(this.cssWidth, this.cssHeight) * 0.15;
         const positions = this.system.positions;
-        const centerX = this.cssWidth / 2;
-        const centerY = this.cssHeight / 2;
 
         for (let body = 0; body < BODY_COUNT; body += 1) {
             const offset = body * AXIS_COUNT;
-            const perspective = getRecoveryPerspective(positions[offset + 2]);
-            const depthIntensity = getRecoveryDepthIntensity(perspective);
-            const projectedX =
-                centerX + positions[offset] * this.positionScale * perspective;
-            const projectedY =
-                centerY - positions[offset + 1] * this.positionScale * perspective;
-            const recoveryRadius = clamp(
-                this.glowScale
-                    * 0.54
-                    * perspective
-                    * (0.86 + 0.3 * depthIntensity),
-                MIN_GLOW_RADIUS,
-                MAX_RECOVERY_GLOW_RADIUS,
-            );
-            const overflow = getOffscreenOverflow(
-                projectedX,
-                projectedY,
-                recoveryRadius * 0.16,
+            const overflow = getRecoveryOverflow(
+                positions[offset],
+                positions[offset + 1],
+                positions[offset + 2],
                 this.cssWidth,
                 this.cssHeight,
-                margin,
+                this.positionScale,
+                this.glowScale,
+                CAMERA_DISTANCE,
             );
             const urgency = updateRecoveryTracking(
                 this.offscreenDuration,

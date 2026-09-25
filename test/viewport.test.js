@@ -5,8 +5,8 @@ import { ThreeBodySystem } from "../src/simulation/physics.js";
 import {
     getGlowScale,
     getNearCameraFade,
-    getOffscreenOverflow,
     getPositionScale,
+    getRecoveryOverflow,
     getVisualPerspective,
     getVisualZ,
     MAX_RECOVERY_STALL_DURATION,
@@ -17,31 +17,6 @@ import {
 const FIXED_STEP = 1 / 120;
 const FRAME_STEP = 1 / 60;
 const CAMERA_DISTANCE = 6;
-const RECOVERY_DEPTH_GAIN = 2.1;
-const MIN_RECOVERY_PERSPECTIVE = 0.65;
-const MAX_RECOVERY_PERSPECTIVE = 1.62;
-const MIN_GLOW_RADIUS = 32;
-const MAX_RECOVERY_GLOW_RADIUS = 220;
-
-function clamp(value, minimum, maximum) {
-    return Math.min(maximum, Math.max(minimum, value));
-}
-
-function smoothstep(value) {
-    const normalized = clamp(value, 0, 1);
-    return normalized * normalized * (3 - 2 * normalized);
-}
-
-function getRecoveryPerspective(positionZ) {
-    const visualDepth = positionZ * RECOVERY_DEPTH_GAIN;
-    const safeDepth = Math.min(visualDepth, CAMERA_DISTANCE - 0.5);
-
-    return clamp(
-        CAMERA_DISTANCE / (CAMERA_DISTANCE - safeDepth),
-        MIN_RECOVERY_PERSPECTIVE,
-        MAX_RECOVERY_PERSPECTIVE,
-    );
-}
 
 test("portrait layouts constrain position scale without shrinking the glow equally", () => {
     assert.equal(getPositionScale(1280, 720), 180);
@@ -49,6 +24,16 @@ test("portrait layouts constrain position scale without shrinking the glow equal
     assert.ok(Math.abs(getPositionScale(390, 844) - 390 / 3.4) < 1e-12);
     assert.equal(getGlowScale(390, 844), 195);
     assert.ok(getGlowScale(390, 844) > getPositionScale(390, 844));
+});
+
+test("recovery overflow tracks projected position and the camera depth limit", () => {
+    assert.equal(getRecoveryOverflow(0, 0, 0, 400, 400, 100, 0, 6), 0);
+    assert.ok(Math.abs(
+        getRecoveryOverflow(10, 0, 0, 400, 400, 100, 0, 6) - 734.88,
+    ) < 1e-10);
+    assert.ok(Math.abs(
+        getRecoveryOverflow(10, 0, 10, 400, 400, 100, 0, 6) - 1354.88,
+    ) < 1e-10);
 });
 
 test("main-camera depth remains continuous and uncapped through a close pass", () => {
@@ -184,7 +169,6 @@ test("offscreen fallback tracks stalled recovery instead of total return time", 
 test("narrow-screen recovery remains stable during a twenty-minute run", () => {
     const width = 390;
     const height = 844;
-    const margin = Math.min(width, height) * 0.15;
     const positionScale = getPositionScale(width, height);
     const glowScale = getGlowScale(width, height);
     const offscreenDurations = new Float64Array(3);
@@ -201,30 +185,15 @@ test("narrow-screen recovery remains stable during a twenty-minute run", () => {
 
         for (let body = 0; body < 3; body += 1) {
             const offset = body * 3;
-            const perspective = getRecoveryPerspective(system.positions[offset + 2]);
-            const depthIntensity = smoothstep(
-                (perspective - MIN_RECOVERY_PERSPECTIVE)
-                / (MAX_RECOVERY_PERSPECTIVE - MIN_RECOVERY_PERSPECTIVE),
-            );
-            const projectedX = width / 2
-                + system.positions[offset] * positionScale * perspective;
-            const projectedY = height / 2
-                - system.positions[offset + 1] * positionScale * perspective;
-            const recoveryRadius = clamp(
-                glowScale
-                    * 0.54
-                    * perspective
-                    * (0.86 + 0.3 * depthIntensity),
-                MIN_GLOW_RADIUS,
-                MAX_RECOVERY_GLOW_RADIUS,
-            );
-            const overflow = getOffscreenOverflow(
-                projectedX,
-                projectedY,
-                recoveryRadius * 0.16,
+            const overflow = getRecoveryOverflow(
+                system.positions[offset],
+                system.positions[offset + 1],
+                system.positions[offset + 2],
                 width,
                 height,
-                margin,
+                positionScale,
+                glowScale,
+                CAMERA_DISTANCE,
             );
             const urgency = updateRecoveryTracking(
                 offscreenDurations,

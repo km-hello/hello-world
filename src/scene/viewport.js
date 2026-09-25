@@ -4,6 +4,11 @@ const MIN_HORIZONTAL_GLOW_SPAN = 2;
 const RECOVERY_URGENCY_DELAY = 6;
 const RECOVERY_URGENCY_RAMP = 2;
 const RECOVERY_PROGRESS_EPSILON = 0.01;
+const RECOVERY_DEPTH_GAIN = 2.1;
+const MIN_RECOVERY_PERSPECTIVE = 0.65;
+const MAX_RECOVERY_PERSPECTIVE = 1.62;
+const MIN_GLOW_RADIUS = 32;
+const MAX_RECOVERY_GLOW_RADIUS = 220;
 
 export const MAX_RECOVERY_STALL_DURATION = 12;
 // The main camera's plane expressed in simulation-space Z units. Keeping this
@@ -90,6 +95,45 @@ export function getOffscreenOverflow(
         projectedX - coreRadius - (width + margin),
         -margin - (projectedY + coreRadius),
         projectedY - coreRadius - (height + margin),
+    );
+}
+
+export function getRecoveryOverflow(
+    positionX,
+    positionY,
+    positionZ,
+    width,
+    height,
+    positionScale,
+    glowScale,
+    cameraDistance,
+) {
+    const visualDepth = positionZ * RECOVERY_DEPTH_GAIN;
+    const safeDepth = Math.min(visualDepth, cameraDistance - 0.5);
+    const perspective = clamp(
+        cameraDistance / (cameraDistance - safeDepth),
+        MIN_RECOVERY_PERSPECTIVE,
+        MAX_RECOVERY_PERSPECTIVE,
+    );
+    const depthIntensity = smoothstep(
+        (perspective - MIN_RECOVERY_PERSPECTIVE)
+        / (MAX_RECOVERY_PERSPECTIVE - MIN_RECOVERY_PERSPECTIVE),
+    );
+    const projectedX = width / 2 + positionX * positionScale * perspective;
+    const projectedY = height / 2 - positionY * positionScale * perspective;
+    const recoveryRadius = clamp(
+        glowScale * 0.54 * perspective * (0.86 + 0.3 * depthIntensity),
+        MIN_GLOW_RADIUS,
+        MAX_RECOVERY_GLOW_RADIUS,
+    );
+
+    return getOffscreenOverflow(
+        projectedX,
+        projectedY,
+        recoveryRadius * 0.16,
+        width,
+        height,
+        Math.min(width, height) * 0.15,
     );
 }
 
