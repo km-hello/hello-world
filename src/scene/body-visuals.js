@@ -13,12 +13,12 @@ import {
     Sprite,
     SpriteMaterial,
     SRGBColorSpace,
+    Vector3,
 } from "three";
 
 import {
     getNearCameraFade,
     getVisualPerspective,
-    getVisualZ,
 } from "./viewport.js";
 
 const BODY_COUNT = 3;
@@ -159,9 +159,11 @@ function createRadialTexture(stops) {
 }
 
 export class BodyVisuals {
-    constructor(scene, cameraDistance) {
+    constructor(scene, cameraDistance, camera) {
         this.scene = scene;
         this.cameraDistance = cameraDistance;
+        this.camera = camera;
+        this.cameraSpacePosition = new Vector3();
         this.visuals = [];
         this.trails = [];
         this.trailHistory = [];
@@ -180,30 +182,38 @@ export class BodyVisuals {
     }
 
     updateBodies(positions, reflectionProbePosition) {
+        this.camera.updateMatrixWorld();
+
         for (let body = 0; body < BODY_COUNT; body += 1) {
             const offset = body * AXIS_COUNT;
             const positionZ = positions[offset + 2];
-            const perspective = getVisualPerspective(positionZ);
+            const visual = this.visuals[body];
+
+            visual.group.position.set(
+                positions[offset] * this.positionWorldScale,
+                positions[offset + 1] * this.positionWorldScale,
+                positionZ * this.positionWorldScale,
+            );
+            const forwardDistance = -this.cameraSpacePosition
+                .copy(visual.group.position)
+                .applyMatrix4(this.camera.matrixWorldInverse).z;
+            const perspective = getVisualPerspective(
+                forwardDistance,
+                this.cameraDistance,
+            );
             const depthIntensity = getDepthIntensity(perspective);
             const cameraFade = getNearCameraFade(
-                positionZ,
-                this.cameraDistance,
+                forwardDistance,
                 CAMERA_NEAR_DISTANCE,
                 CAMERA_FADE_FULL_OPACITY_DISTANCE,
             );
             const diameter =
                 this.glowWorldDiameter * (0.58 + 0.82 * depthIntensity);
-            const visual = this.visuals[body];
             const haloOpacity =
                 FAR_HALO_OPACITY + (0.95 - FAR_HALO_OPACITY) * depthIntensity;
             const coreOpacity =
                 FAR_CORE_OPACITY + (1 - FAR_CORE_OPACITY) * depthIntensity;
 
-            visual.group.position.set(
-                positions[offset] * this.positionWorldScale,
-                positions[offset + 1] * this.positionWorldScale,
-                getVisualZ(positionZ, this.cameraDistance),
-            );
             visual.halo.scale.set(diameter, diameter, 1);
             visual.halo.material.opacity = haloOpacity * cameraFade;
             const coreDiameter = diameter * (0.27 + 0.12 * depthIntensity);
@@ -213,6 +223,15 @@ export class BodyVisuals {
             visual.halo.visible = visual.mainVisible;
             visual.core.visible = visual.mainVisible;
 
+            // Reflection styling uses world depth independently of camera rotation.
+            const reflectionDepthIntensity = getDepthIntensity(
+                getVisualPerspective(
+                    this.cameraDistance - visual.group.position.z,
+                    this.cameraDistance,
+                ),
+            );
+            const originalDiameter = this.glowWorldDiameter
+                * (0.58 + 0.82 * reflectionDepthIntensity);
             const reflectionDistance = reflectionProbePosition
                 ? visual.group.position.distanceTo(reflectionProbePosition)
                 : Number.POSITIVE_INFINITY;
@@ -220,9 +239,9 @@ export class BodyVisuals {
                 ? 2
                     * reflectionDistance
                     * Math.tan(REFLECTION_MAX_ANGULAR_RADIUS)
-                : diameter;
+                : originalDiameter;
             const reflectionDiameter = Math.min(
-                diameter,
+                originalDiameter,
                 maximumReflectionDiameter,
             );
             const reflectionNearFade = Number.isFinite(reflectionDistance)
@@ -238,18 +257,20 @@ export class BodyVisuals {
                 1,
             );
             visual.reflectionHalo.material.opacity =
-                haloOpacity
+                (FAR_HALO_OPACITY
+                    + (0.95 - FAR_HALO_OPACITY) * reflectionDepthIntensity)
                 * REFLECTION_HALO_OPACITY_SCALE
                 * reflectionNearFade;
             const reflectionCoreDiameter =
-                reflectionDiameter * (0.27 + 0.12 * depthIntensity);
+                reflectionDiameter * (0.27 + 0.12 * reflectionDepthIntensity);
             visual.reflectionCore.scale.set(
                 reflectionCoreDiameter,
                 reflectionCoreDiameter,
                 1,
             );
             visual.reflectionCore.material.opacity =
-                coreOpacity
+                (FAR_CORE_OPACITY
+                    + (1 - FAR_CORE_OPACITY) * reflectionDepthIntensity)
                 * REFLECTION_CORE_OPACITY_SCALE
                 * reflectionNearFade;
             visual.pointLight.intensity = BODY_STYLES[body].lightIntensity;
@@ -480,10 +501,8 @@ export class BodyVisuals {
                 output[offset] = history[offset] * this.positionWorldScale;
                 output[offset + 1] =
                     history[offset + 1] * this.positionWorldScale;
-                output[offset + 2] = getVisualZ(
-                    history[offset + 2],
-                    this.cameraDistance,
-                );
+                output[offset + 2] =
+                    history[offset + 2] * this.positionWorldScale;
             }
 
             attribute.needsUpdate = true;

@@ -5,16 +5,17 @@ const PAIR_FIRST = [0, 0, 1];
 const PAIR_SECOND = [1, 2, 2];
 const PAIR_THIRD = [2, 1, 0];
 
+// Rotate the initial state by Rz(75°) Ry(15°) Rx(30°) to balance axis coverage.
 const DEFAULT_POSITIONS = [
-    -0.9, -0.25, 0.35,
-    0.75, -0.35, -0.25,
-    0.15, 0.6, -0.1,
+    0.16509712893384312, -0.8965135087753036, 0.4049771186143679,
+    0.3333140253801828, 0.5557849655057475, -0.5722803793619295,
+    -0.498411154314026, 0.340728543269556, 0.16730326074756152,
 ];
 
 const DEFAULT_VELOCITIES = [
-    0.3, 0.576, -0.216,
-    -0.48, 0.216, 0.264,
-    0.18, -0.792, -0.048,
+    -0.5043917819458753, 0.46219776362657805, 0.01985340283312885,
+    -0.15063533104202334, -0.3494374587149502, 0.4493934350752107,
+    0.6550271129878986, -0.11276030491162786, -0.46924683790833954,
 ];
 
 const DEFAULT_MASSES = [1, 1, 1];
@@ -48,6 +49,30 @@ export const DEFAULT_PHYSICS_CONFIG = Object.freeze({
     binaryOpenDistance: 1.6,
     binaryControlCooldown: 8,
     failSafeRadius: 20,
+});
+
+export const GRAVITY_PHYSICS_CONFIG = Object.freeze({
+    ...DEFAULT_PHYSICS_CONFIG,
+    coreRadius: 0,
+    coreRepulsion: 0,
+    restoreStiffness: 0,
+    maxRestoreAcceleration: 0,
+    boundaryDamping: 0,
+    speedDamping: 0,
+    binaryCaptureDistance: 0,
+    // Zero disables these safety limits; non-finite states still reset.
+    maxAcceleration: 0,
+    hardSpeedLimit: 0,
+    failSafeRadius: 0,
+});
+
+export const VISUAL_PHYSICS_CONFIG = Object.freeze({
+    ...DEFAULT_PHYSICS_CONFIG,
+    boundaryStart: 0.8,
+    boundaryFull: 3.2,
+    restoreStiffness: 1.2,
+    maxAcceleration: 0,
+    hardSpeedLimit: 0,
 });
 
 function clamp(value, minimum, maximum) {
@@ -385,7 +410,7 @@ export class ThreeBodySystem {
                 output[offset + 2],
             );
 
-            if (acceleration > maxAcceleration && acceleration > 0) {
+            if (maxAcceleration > 0 && acceleration > maxAcceleration) {
                 const safetyScale = maxAcceleration / acceleration;
                 output[offset] *= safetyScale;
                 output[offset + 1] *= safetyScale;
@@ -439,7 +464,7 @@ export class ThreeBodySystem {
                 this.velocities[offset + 2],
             );
 
-            if (dampedSpeed > hardSpeedLimit && dampedSpeed > 0) {
+            if (hardSpeedLimit > 0 && dampedSpeed > hardSpeedLimit) {
                 const limitScale = hardSpeedLimit / dampedSpeed;
                 this.velocities[offset] *= limitScale;
                 this.velocities[offset + 1] *= limitScale;
@@ -490,14 +515,19 @@ export class ThreeBodySystem {
         }
     }
 
-    _detectBoundPair() {
+    _detectBoundPair(candidatePair = this._binaryCandidatePair) {
         const {
             gravityConstant,
             softening,
             binaryCaptureDistance,
             binaryIsolationDistance,
             binaryBindingEnergyMargin,
+            binaryOpenDistance,
+            binaryReengageDistance,
         } = this.config;
+        if (binaryCaptureDistance === 0) {
+            return -1;
+        }
         let detectedPair = -1;
         let closestSeparation = Number.POSITIVE_INFINITY;
 
@@ -512,8 +542,11 @@ export class ThreeBodySystem {
             const deltaY = this.positions[secondOffset + 1] - this.positions[firstOffset + 1];
             const deltaZ = this.positions[secondOffset + 2] - this.positions[firstOffset + 2];
             const separation = Math.hypot(deltaX, deltaY, deltaZ);
+            // Wider exit thresholds avoid restarting eccentric candidates every orbit.
+            const isCandidate = pair === candidatePair;
+            const maximumSeparation = isCandidate ? binaryOpenDistance : binaryCaptureDistance;
 
-            if (separation >= binaryCaptureDistance || separation >= closestSeparation) {
+            if (separation >= maximumSeparation || separation >= closestSeparation) {
                 continue;
             }
 
@@ -538,7 +571,8 @@ export class ThreeBodySystem {
                 this.positions[thirdOffset + 2] - centerZ,
             );
 
-            if (thirdDistance <= binaryIsolationDistance) {
+            const minimumIsolation = isCandidate ? binaryReengageDistance : binaryIsolationDistance;
+            if (thirdDistance <= minimumIsolation) {
                 continue;
             }
 
@@ -668,8 +702,6 @@ export class ThreeBodySystem {
     }
 
     _stateIsSafe() {
-        const maximumRadiusSquared = this.config.failSafeRadius * this.config.failSafeRadius;
-
         for (let index = 0; index < STATE_SIZE; index += 1) {
             if (
                 !Number.isFinite(this.positions[index])
@@ -682,18 +714,27 @@ export class ThreeBodySystem {
 
         for (let body = 0; body < BODY_COUNT; body += 1) {
             const offset = body * AXIS_COUNT;
-            const radiusSquared =
-                this.positions[offset] * this.positions[offset]
-                + this.positions[offset + 1] * this.positions[offset + 1]
-                + this.positions[offset + 2] * this.positions[offset + 2];
+            const radius = Math.hypot(
+                this.positions[offset],
+                this.positions[offset + 1],
+                this.positions[offset + 2],
+            );
 
-            if (radiusSquared > maximumRadiusSquared) {
+            if (this.config.failSafeRadius > 0 && radius > this.config.failSafeRadius) {
                 return false;
             }
         }
 
         return true;
     }
+}
+
+export function createVisualSystem(random = Math.random) {
+    return new ThreeBodySystem({
+        ...VISUAL_PHYSICS_CONFIG,
+        initialPositions: DEFAULT_POSITIONS.map((value) => value + (random() - 0.5) * 0.3),
+        initialVelocities: DEFAULT_VELOCITIES.map((value) => value + (random() - 0.5) * 0.3),
+    });
 }
 
 export const THREE_BODY_CONSTANTS = Object.freeze({

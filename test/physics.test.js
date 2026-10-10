@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ThreeBodySystem } from "../src/simulation/physics.js";
+import { createVisualSystem, GRAVITY_PHYSICS_CONFIG, ThreeBodySystem } from "../src/simulation/physics.js";
 
 const FIXED_STEP = 1 / 120;
+
+function seededRandom(seed) {
+    return () => {
+        seed = (Math.imul(seed, 1_664_525) + 1_013_904_223) >>> 0;
+        return seed / 2 ** 32;
+    };
+}
 
 function allFinite(values) {
     return values.every((value) => Number.isFinite(value));
@@ -22,7 +29,7 @@ function weightedVectorSum(vectors, masses) {
     return result;
 }
 
-function getNewtonianEnergy(system, gravityConstant) {
+function getGravitationalEnergy(system, gravityConstant, softening = 0) {
     let energy = 0;
 
     for (let first = 0; first < system.masses.length; first += 1) {
@@ -53,7 +60,7 @@ function getNewtonianEnergy(system, gravityConstant) {
                 gravityConstant
                 * firstMass
                 * system.masses[second]
-                / separation;
+                / Math.hypot(separation, softening);
         }
     }
 
@@ -67,6 +74,74 @@ test("initial state has no center-of-mass drift or net momentum", () => {
 
     for (const value of [...weightedPosition, ...weightedVelocity]) {
         assert.ok(Math.abs(value) < 1e-12, `expected ${value} to be approximately zero`);
+    }
+});
+
+test("visual initial-state jitter is reproducible, finite and centered", () => {
+    const first = createVisualSystem(seededRandom(42));
+    const second = createVisualSystem(seededRandom(42));
+    const otherSeed = createVisualSystem(seededRandom(2026));
+
+    assert.deepEqual(first.positions, second.positions);
+    assert.deepEqual(first.velocities, second.velocities);
+    assert.notDeepEqual(first.positions, otherSeed.positions);
+    assert.notDeepEqual(first.velocities, otherSeed.velocities);
+    assert.ok(allFinite(first.positions));
+    assert.ok(allFinite(first.velocities));
+    assert.ok(allFinite(first.accelerations));
+    for (const value of [
+        ...weightedVectorSum(first.positions, first.masses),
+        ...weightedVectorSum(first.velocities, first.masses),
+    ]) {
+        assert.ok(Math.abs(value) < 1e-12);
+    }
+    first.step(FIXED_STEP);
+    first.reset();
+    assert.deepEqual(first.positions, second.positions);
+    assert.deepEqual(first.velocities, second.velocities);
+});
+
+test("visual trajectories remain bounded without resets or long binary capture over twenty minutes", () => {
+    for (const seed of [1, 42, 2026]) {
+        const system = createVisualSystem(seededRandom(seed));
+        let maximumRadius = 0;
+        let maximumSpeed = 0;
+        let previousPair = -1;
+        let boundDuration = 0;
+        let maximumBoundDuration = 0;
+        const stepDuration = 1 / 480;
+        const binaryControlDuration = system.config.binaryCaptureDuration
+            + system.config.binaryControlRampUp
+            + system.config.binaryControlMaximumHold
+            + system.config.binaryControlRampDown;
+
+        for (let step = 0; step < 20 * 60 * 480; step += 1) {
+            assert.equal(system.step(stepDuration), true, `seed ${seed}, step ${step}`);
+            for (let body = 0; body < 3; body += 1) {
+                const offset = body * 3;
+                maximumRadius = Math.max(maximumRadius, Math.hypot(
+                    system.positions[offset],
+                    system.positions[offset + 1],
+                    system.positions[offset + 2],
+                ));
+                maximumSpeed = Math.max(maximumSpeed, Math.hypot(
+                    system.velocities[offset],
+                    system.velocities[offset + 1],
+                    system.velocities[offset + 2],
+                ));
+            }
+            const pair = system._detectBoundPair();
+            boundDuration = pair < 0 ? 0 : pair === previousPair
+                ? boundDuration + stepDuration : stepDuration;
+            previousPair = pair;
+            maximumBoundDuration = Math.max(maximumBoundDuration, boundDuration);
+        }
+
+        assert.ok(maximumRadius < 3.8, `seed ${seed}, radius ${maximumRadius}`);
+        assert.ok(maximumSpeed < 4.5, `seed ${seed}, speed ${maximumSpeed}`);
+        assert.ok(maximumBoundDuration < binaryControlDuration,
+            `seed ${seed}, binary duration ${maximumBoundDuration}`);
+        assert.equal(system.resetCount, 1, `seed ${seed}`);
     }
 });
 
@@ -113,7 +188,7 @@ test("unconstrained figure-eight conserves energy, momentum, and center of mass"
         -0.93240737, -0.86473146, 0,
     ], true);
 
-    const initialEnergy = getNewtonianEnergy(system, gravityConstant);
+    const initialEnergy = getGravitationalEnergy(system, gravityConstant);
     let maximumRelativeEnergyDrift = 0;
     let maximumMomentum = 0;
     let maximumCenterOfMassOffset = 0;
@@ -123,7 +198,7 @@ test("unconstrained figure-eight conserves energy, momentum, and center of mass"
     for (let step = 0; step < steps; step += 1) {
         system.step(FIXED_STEP);
 
-        const energy = getNewtonianEnergy(system, gravityConstant);
+        const energy = getGravitationalEnergy(system, gravityConstant);
         const momentum = weightedVectorSum(system.velocities, system.masses);
         const weightedPosition = weightedVectorSum(system.positions, system.masses);
         const totalMass = system.masses.reduce((sum, mass) => sum + mass, 0);
@@ -152,11 +227,102 @@ test("unconstrained figure-eight conserves energy, momentum, and center of mass"
     assert.equal(system.binaryInterventionCount, 0);
 });
 
-test("default trajectory reaches the outer activity region", () => {
+test("softened gravity conserves energy and momentum through default close encounters", () => {
+    const system = new ThreeBodySystem(GRAVITY_PHYSICS_CONFIG);
+    const initialEnergy = getGravitationalEnergy(
+        system, system.config.gravityConstant, system.config.softening,
+    );
+    let maximumRelativeEnergyDrift = 0;
+    let maximumMomentum = 0;
+
+    for (let step = 0; step < 120 * 480; step += 1) {
+        assert.equal(system.step(1 / 480), true);
+        const energy = getGravitationalEnergy(
+            system, system.config.gravityConstant, system.config.softening,
+        );
+        maximumRelativeEnergyDrift = Math.max(
+            maximumRelativeEnergyDrift,
+            Math.abs((energy - initialEnergy) / initialEnergy),
+        );
+        maximumMomentum = Math.max(
+            maximumMomentum,
+            Math.hypot(...weightedVectorSum(system.velocities, system.masses)),
+        );
+    }
+
+    assert.ok(maximumRelativeEnergyDrift < 0.005, `energy drift: ${maximumRelativeEnergyDrift}`);
+    assert.ok(maximumMomentum < 1e-10, `momentum: ${maximumMomentum}`);
+    assert.equal(system.resetCount, 1);
+    assert.equal(system.binaryInterventionCount, 0);
+});
+
+test("gravity preset keeps uncapped attractive forces inside the former repulsive core", () => {
+    const system = new ThreeBodySystem({ ...GRAVITY_PHYSICS_CONFIG, masses: [1, 2, 3] });
+    system.setState([
+        -0.04, 0, 0,
+        0.04, 0, 0,
+        0, 1, 0,
+    ], new Float64Array(9));
+    const firstPairAcceleration = system.config.gravityConstant * 2 * 0.08
+        / (0.08 ** 2 + system.config.softening ** 2) ** 1.5;
+    const thirdBodyAcceleration = system.config.gravityConstant * 3 * 0.04
+        / (0.04 ** 2 + 1 + system.config.softening ** 2) ** 1.5;
+
+    assert.ok(Math.abs(system.accelerations[0] - firstPairAcceleration - thirdBodyAcceleration) < 1e-12);
+    assert.ok(system.accelerations[0] > 18);
+    assert.ok(Math.hypot(...weightedVectorSum(system.accelerations, system.masses)) < 1e-12);
+});
+
+test("gravity preset permits a persistent binary and escaping body without caps or resets", () => {
+    const system = new ThreeBodySystem(GRAVITY_PHYSICS_CONFIG);
+    const separation = 0.5;
+    const orbitalSpeed = Math.sqrt(
+        system.config.gravityConstant * separation ** 2
+        / (2 * (separation ** 2 + system.config.softening ** 2) ** 1.5),
+    );
+    system.setState([
+        -separation / 2, 0, 0,
+        separation / 2, 0, 0,
+        0, 100, 0,
+    ], [
+        0, -orbitalSpeed, 0,
+        0, orbitalSpeed, 0,
+        0, 8, 0,
+    ]);
+    system.setRecoveryUrgency(2, 1);
+
+    for (let step = 0; step < 12 * 480; step += 1) {
+        assert.equal(system.step(1 / 480), true);
+    }
+
+    assert.ok(system.positions[7] > 190);
+    assert.ok(system.velocities[7] > 7.99);
+    assert.ok(Math.hypot(
+        system.positions[3] - system.positions[0],
+        system.positions[4] - system.positions[1],
+        system.positions[5] - system.positions[2],
+    ) < 0.51);
+    assert.equal(system.resetCount, 1);
+    assert.equal(system.binaryInterventionCount, 0);
+    assert.equal(system.binaryControlStrength, 0);
+});
+
+test("gravity preset still resets a non-finite state", () => {
+    const system = new ThreeBodySystem(GRAVITY_PHYSICS_CONFIG);
+    system.positions[0] = Number.POSITIVE_INFINITY;
+
+    assert.equal(system.step(1 / 480), false);
+    assert.equal(system.resetCount, 2);
+    assert.equal(allFinite(system.positions), true);
+    assert.equal(allFinite(system.velocities), true);
+    assert.equal(allFinite(system.accelerations), true);
+});
+
+test("default trajectory reaches the outer activity region within three minutes", () => {
     const system = new ThreeBodySystem();
     let maximumRadius = 0;
 
-    for (let step = 0; step < 120 / FIXED_STEP; step += 1) {
+    for (let step = 0; step < 180 / FIXED_STEP; step += 1) {
         system.step(FIXED_STEP);
 
         for (let body = 0; body < 3; body += 1) {
@@ -320,6 +486,94 @@ test("an isolated binary completes several natural orbits before intervention", 
     assert.equal(system.binaryControlStrength, 0);
 });
 
+function createEccentricBinary(semiMajorAxis = 0.7) {
+    const system = new ThreeBodySystem({
+        ...GRAVITY_PHYSICS_CONFIG,
+        binaryCaptureDistance: 0.7,
+        masses: [1, 1, 1e-9],
+    });
+    const separation = 0.45;
+    const speed = Math.sqrt(
+        system.config.gravityConstant * 2 * (2 / separation - 1 / semiMajorAxis),
+    ) / 2;
+    system.setState([
+        -separation / 2, 0, 0,
+        separation / 2, 0, 0,
+        100, 0, 0,
+    ], [
+        0, -speed, 0,
+        0, speed, 0,
+        0, 0, 0,
+    ]);
+    return system;
+}
+
+test("an eccentric isolated binary remains a candidate across capture-distance crossings", () => {
+    const system = createEccentricBinary();
+    let maximumSeparation = 0;
+    let wasNear = true;
+    let crossings = 0;
+    for (let step = 0; step < 8.1 * 480; step += 1) {
+        assert.equal(system.step(1 / 480), true);
+        const separation = Math.hypot(
+            system.positions[3] - system.positions[0],
+            system.positions[4] - system.positions[1],
+            system.positions[5] - system.positions[2],
+        );
+        maximumSeparation = Math.max(maximumSeparation, separation);
+        const near = separation < system.config.binaryCaptureDistance;
+        if (near !== wasNear) crossings += 1;
+        wasNear = near;
+    }
+    assert.ok(crossings >= 4);
+    assert.ok(maximumSeparation > system.config.binaryCaptureDistance);
+    assert.ok(maximumSeparation < system.config.binaryOpenDistance);
+    assert.equal(system.binaryInterventionCount, 1);
+    assert.ok(system.binaryControlStrength > 0);
+});
+
+test("a returning third body clears the binary candidate only at the reengagement distance", () => {
+    const system = createEccentricBinary();
+    for (let step = 0; step < 480; step += 1) system.step(1 / 480);
+    assert.equal(system._binaryCandidatePair, 0);
+    const duration = system._binaryCandidateTime;
+
+    system.positions[6] = 1.6;
+    system.step(1 / 480);
+    assert.equal(system._binaryCandidatePair, 0);
+    assert.ok(system._binaryCandidateTime > duration);
+
+    system.positions[6] = 1.2;
+    system.step(1 / 480);
+    assert.equal(system._binaryCandidatePair, -1);
+    assert.equal(system._binaryCandidateTime, 0);
+    assert.equal(system.binaryInterventionCount, 0);
+});
+
+test("brief close approaches that open beyond the exit distance do not trigger intervention", () => {
+    const system = createEccentricBinary(1.5);
+    let maximumCandidateDuration = 0;
+    let opened = false;
+    for (let step = 0; step < 30 * 480; step += 1) {
+        system.step(1 / 480);
+        maximumCandidateDuration = Math.max(maximumCandidateDuration, system._binaryCandidateTime);
+        const separation = Math.hypot(
+            system.positions[3] - system.positions[0],
+            system.positions[4] - system.positions[1],
+            system.positions[5] - system.positions[2],
+        );
+        if (separation >= system.config.binaryOpenDistance) {
+            opened = true;
+            assert.equal(system._binaryCandidatePair, -1);
+            assert.equal(system._binaryCandidateTime, 0);
+        }
+    }
+    assert.equal(opened, true);
+    assert.ok(maximumCandidateDuration > 0);
+    assert.ok(maximumCandidateDuration < system.config.binaryCaptureDuration);
+    assert.equal(system.binaryInterventionCount, 0);
+});
+
 test("persistent binary controller ramps smoothly without changing net momentum", () => {
     const system = new ThreeBodySystem({
         binaryCaptureDuration: 0.1,
@@ -421,4 +675,14 @@ test("non-finite state triggers a deterministic safe reset", () => {
     assert.equal(system.resetCount, initialResetCount + 1);
     assert.equal(allFinite(system.positions), true);
     assert.equal(allFinite(system.velocities), true);
+});
+
+
+test("binary observations can retain their own candidate during controller cooldown", () => {
+    const system = createVisualSystem(seededRandom(1));
+    system.setState([-0.5, 0, 0, 0.5, 0, 0, 0, 5, 0], new Float64Array(9));
+    assert.equal(system._binaryCandidatePair, -1);
+    assert.equal(system._detectBoundPair(), -1);
+    assert.equal(system._detectBoundPair(0), 0);
+    assert.equal(system._binaryCandidatePair, -1);
 });

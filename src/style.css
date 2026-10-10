@@ -39,6 +39,15 @@ body {
     touch-action: none;
 }
 
+.scene-ready .cosmic-scene {
+    pointer-events: auto;
+}
+
+.cosmic-scene:focus-visible {
+    outline: 2px solid #52ddff;
+    outline-offset: -4px;
+}
+
 .container {
     position: relative;
     z-index: 1;

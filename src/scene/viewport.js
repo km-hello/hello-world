@@ -4,17 +4,12 @@ const MIN_HORIZONTAL_GLOW_SPAN = 2;
 const RECOVERY_URGENCY_DELAY = 6;
 const RECOVERY_URGENCY_RAMP = 2;
 const RECOVERY_PROGRESS_EPSILON = 0.01;
-const RECOVERY_DEPTH_GAIN = 2.1;
 const MIN_RECOVERY_PERSPECTIVE = 0.65;
 const MAX_RECOVERY_PERSPECTIVE = 1.62;
 const MIN_GLOW_RADIUS = 32;
 const MAX_RECOVERY_GLOW_RADIUS = 220;
 
 export const MAX_RECOVERY_STALL_DURATION = 12;
-// The main camera's plane expressed in simulation-space Z units. Keeping this
-// below the default blue body's closest approach lets that body genuinely pass
-// the viewer instead of reaching a capped perspective and turning in place.
-export const VISUAL_CAMERA_POSITION_Z = 1.2;
 
 function clamp(value, minimum, maximum) {
     return Math.min(maximum, Math.max(minimum, value));
@@ -40,23 +35,12 @@ export function getGlowScale(width, height) {
 }
 
 /**
- * Map simulation-space depth to the Three.js camera's world-space depth.
- * This mapping stays linear through and beyond the camera plane, so neither a
- * near-object size cap nor a frozen maximum Z position is needed.
- */
-export function getVisualZ(positionZ, cameraDistance) {
-    return positionZ * cameraDistance / VISUAL_CAMERA_POSITION_Z;
-}
-
-/**
  * Return the perspective multiplier while a body is in front of the viewer.
  * At and beyond the camera plane the renderer clips the body naturally.
  */
-export function getVisualPerspective(positionZ) {
-    const forwardDistance = VISUAL_CAMERA_POSITION_Z - positionZ;
-
+export function getVisualPerspective(forwardDistance, cameraDistance) {
     return forwardDistance > 0
-        ? VISUAL_CAMERA_POSITION_Z / forwardDistance
+        ? cameraDistance / forwardDistance
         : Number.POSITIVE_INFINITY;
 }
 
@@ -65,16 +49,10 @@ export function getVisualPerspective(positionZ) {
  * Perspective remains uncapped; only opacity changes during the final approach.
  */
 export function getNearCameraFade(
-    positionZ,
-    cameraDistance,
+    forwardDistance,
     nearDistance,
     fullOpacityDistance,
 ) {
-    const forwardDistance = cameraDistance - getVisualZ(
-        positionZ,
-        cameraDistance,
-    );
-
     return smoothstep(
         (forwardDistance - nearDistance)
         / (fullOpacityDistance - nearDistance),
@@ -107,8 +85,9 @@ export function getRecoveryOverflow(
     positionScale,
     glowScale,
     cameraDistance,
+    positionWorldScale,
 ) {
-    const visualDepth = positionZ * RECOVERY_DEPTH_GAIN;
+    const visualDepth = positionZ * positionWorldScale;
     const safeDepth = Math.min(visualDepth, cameraDistance - 0.5);
     const perspective = clamp(
         cameraDistance / (cameraDistance - safeDepth),
