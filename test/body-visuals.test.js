@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PerspectiveCamera, Scene } from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import { BodyVisuals } from "../src/scene/body-visuals.js";
 
@@ -84,36 +83,25 @@ test("default view preserves body styling and fades bodies at the near plane", (
     assert.equal(visuals.visuals[2].core.material.opacity, 0);
 });
 
-test("OrbitControls rotation refreshes camera matrices without moving bodies", (t) => {
+test("camera rotation refreshes depth styling without moving bodies", (t) => {
     const { camera, visuals } = createFixture(t);
-    const canvas = new EventTarget();
-    canvas.style = {};
-    canvas.clientHeight = 4;
-    canvas.ownerDocument = new EventTarget();
-    canvas.getRootNode = () => canvas.ownerDocument;
-    const controls = new OrbitControls(camera, canvas);
-    controls.enablePan = false;
-    controls.enableZoom = false;
-    controls.listenToKeyEvents(canvas);
-    t.after(() => controls.dispose());
     const positions = new Float64Array([7, 0, 0, 0, 0, 7, -7, 0, 0]);
     visuals.updateBodies(positions);
     const worldPositions = visuals.visuals.map((visual) => visual.group.position.toArray());
     assert.equal(visuals.visuals[1].halo.visible, false);
 
-    const rotate = () => {
-        const keyEvent = new Event("keydown", { cancelable: true });
-        Object.assign(keyEvent, { code: "ArrowRight", shiftKey: true });
-        canvas.dispatchEvent(keyEvent);
+    const rotate = (x, z) => {
+        camera.position.set(x, 0, z);
+        camera.lookAt(0, 0, 0);
         visuals.updateBodies(positions);
         assert.deepEqual(visuals.visuals.map((visual) => visual.group.position.toArray()), worldPositions);
     };
-    rotate();
+    rotate(CAMERA_DISTANCE, 0);
     assert.ok(camera.position.x > 5.99);
     assert.equal(visuals.visuals[0].halo.visible, false);
     assert.equal(visuals.visuals[1].halo.visible, true);
     assert.equal(visuals.visuals[2].halo.visible, true);
-    rotate();
+    rotate(0, -CAMERA_DISTANCE);
     assert.ok(camera.position.z < -5.99);
     assert.equal(visuals.visuals[0].halo.visible, true);
     assert.equal(visuals.visuals[1].halo.visible, true);

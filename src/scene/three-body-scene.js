@@ -57,7 +57,6 @@ export class ThreeBodyScene {
         this.controls.mouseButtons.MIDDLE = null;
         this.controls.mouseButtons.RIGHT = null;
         this.controls.cursorStyle = "grab";
-        this.controls.listenToKeyEvents(canvas);
 
         this.system = createVisualSystem();
         this.motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");

@@ -43,11 +43,6 @@ body {
     pointer-events: auto;
 }
 
-.cosmic-scene:focus-visible {
-    outline: 2px solid #52ddff;
-    outline-offset: -4px;
-}
-
 .container {
     position: relative;
     z-index: 1;
