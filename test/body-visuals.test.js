@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PerspectiveCamera, Scene, Vector3 } from "three";
+import { PerspectiveCamera, Scene } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import { BodyVisuals } from "../src/scene/body-visuals.js";
@@ -22,15 +22,6 @@ function createFixture(t) {
         globalThis.document = originalDocument;
     });
     return { camera, visuals };
-}
-
-function reflectionStyle(visual) {
-    return [
-        ...visual.reflectionHalo.scale.toArray(),
-        ...visual.reflectionCore.scale.toArray(),
-        visual.reflectionHalo.material.opacity,
-        visual.reflectionCore.material.opacity,
-    ];
 }
 
 test("bodies and trail history share uniform XYZ scaling after resize", (t) => {
@@ -93,7 +84,7 @@ test("default view preserves body styling and fades bodies at the near plane", (
     assert.equal(visuals.visuals[2].core.material.opacity, 0);
 });
 
-test("OrbitControls rotation refreshes camera matrices without moving bodies or reflection styles", (t) => {
+test("OrbitControls rotation refreshes camera matrices without moving bodies", (t) => {
     const { camera, visuals } = createFixture(t);
     const canvas = new EventTarget();
     canvas.style = {};
@@ -106,43 +97,27 @@ test("OrbitControls rotation refreshes camera matrices without moving bodies or 
     controls.listenToKeyEvents(canvas);
     t.after(() => controls.dispose());
     const positions = new Float64Array([7, 0, 0, 0, 0, 7, -7, 0, 0]);
-    const probe = new Vector3(0, 0, 0);
-    visuals.updateBodies(positions, probe);
+    visuals.updateBodies(positions);
     const worldPositions = visuals.visuals.map((visual) => visual.group.position.toArray());
-    const reflectionStyles = visuals.visuals.map(reflectionStyle);
-    assert.equal(visuals.visuals[1].mainVisible, false);
+    assert.equal(visuals.visuals[1].halo.visible, false);
 
     const rotate = () => {
         const keyEvent = new Event("keydown", { cancelable: true });
         Object.assign(keyEvent, { code: "ArrowRight", shiftKey: true });
         canvas.dispatchEvent(keyEvent);
-        visuals.updateBodies(positions, probe);
+        visuals.updateBodies(positions);
         assert.deepEqual(visuals.visuals.map((visual) => visual.group.position.toArray()), worldPositions);
-        assert.deepEqual(visuals.visuals.map(reflectionStyle), reflectionStyles);
     };
     rotate();
     assert.ok(camera.position.x > 5.99);
-    assert.equal(visuals.visuals[0].mainVisible, false);
-    assert.equal(visuals.visuals[1].mainVisible, true);
-    assert.equal(visuals.visuals[2].mainVisible, true);
+    assert.equal(visuals.visuals[0].halo.visible, false);
+    assert.equal(visuals.visuals[1].halo.visible, true);
+    assert.equal(visuals.visuals[2].halo.visible, true);
     rotate();
     assert.ok(camera.position.z < -5.99);
-    assert.equal(visuals.visuals[0].mainVisible, true);
-    assert.equal(visuals.visuals[1].mainVisible, true);
+    assert.equal(visuals.visuals[0].halo.visible, true);
+    assert.equal(visuals.visuals[1].halo.visible, true);
     assert.ok(visuals.visuals[1].halo.scale.x < visuals.visuals[0].halo.scale.x);
-});
-
-test("reflection probe fading survives an invisible main sprite", (t) => {
-    const { visuals } = createFixture(t);
-    const positions = new Float64Array([0, 0, 7, 0, 0, 0, 0, 0, 0]);
-    visuals.updateBodies(positions, new Vector3(0, 0, 7));
-    assert.equal(visuals.visuals[0].mainVisible, false);
-    assert.equal(visuals.visuals[0].reflectionHalo.material.opacity, 0);
-    visuals.updateBodies(positions, new Vector3(0, 0, 6));
-    visuals.setReflectionMode(true);
-    assert.equal(visuals.visuals[0].reflectionHalo.visible, true);
-    assert.equal(visuals.visuals[0].halo.visible, false);
-    assert.ok(visuals.visuals[0].reflectionHalo.scale.x < visuals.visuals[0].halo.scale.x);
 });
 
 test("magnified bodies fade correctly when viewed from all six axis directions", (t) => {
@@ -170,4 +145,25 @@ test("magnified bodies fade correctly when viewed from all six axis directions",
             }
         }
     }
+});
+
+
+test("dispose releases shared sprite resources and trail resources once", (t) => {
+    const { visuals } = createFixture(t);
+    const resources = [
+        ...visuals.textures,
+        ...visuals.visuals.flatMap(({ halo, core }) => [halo.material, core.material]),
+        ...visuals.trails.flatMap(({ geometry, material }) => [geometry, material]),
+        visuals.visuals[0].halo.geometry,
+    ];
+    const disposeCounts = resources.map(() => 0);
+    resources.forEach((resource, index) => {
+        resource.addEventListener("dispose", () => { disposeCounts[index] += 1; });
+    });
+    visuals.dispose();
+    visuals.dispose();
+    assert.deepEqual(disposeCounts, resources.map(() => 1));
+    assert.equal(visuals.visuals.length, 0);
+    assert.equal(visuals.trails.length, 0);
+    assert.equal(visuals.textures.length, 0);
 });

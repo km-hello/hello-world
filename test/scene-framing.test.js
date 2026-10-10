@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PerspectiveCamera } from "three";
-import { MirrorMonumentScene } from "../src/scene/mirror-monument-scene.js";
+import { ThreeBodyScene } from "../src/scene/three-body-scene.js";
 import { GRAVITY_PHYSICS_CONFIG, ThreeBodySystem } from "../src/simulation/physics.js";
 
 test("escaping bodies keep moving without reframing; resize depends only on viewport", () => {
@@ -10,12 +10,12 @@ test("escaping bodies keep moving without reframing; resize depends only on view
     globalThis.window = { innerHeight: 720, devicePixelRatio: 1 };
     globalThis.requestAnimationFrame = () => 1;
     try {
-        const scene = Object.create(MirrorMonumentScene.prototype);
+        const scene = Object.create(ThreeBodyScene.prototype);
         scene.system = new ThreeBodySystem(GRAVITY_PHYSICS_CONFIG);
         scene.system.setState([0, 0, 0, 1, 0, 0, 100, 0, 0], [0, 0, 0, 0, 0, 0, 8, 0, 0]);
         scene.camera = new PerspectiveCamera(42, 1, 0.05, 60);
         scene.renderer = { setPixelRatio() {}, setSize() {} };
-        scene.monument = { resize() {}, updateReflection() {} };
+        scene.monument = { resize() {}, update() {} };
         let resizeCount = 0;
         let displayedX;
         scene.bodyVisuals = {
@@ -27,7 +27,7 @@ test("escaping bodies keep moving without reframing; resize depends only on view
         scene.motionPreference = { matches: false };
         scene.accumulator = 0;
         scene.lastTimestamp = 1000;
-        scene.transitionPhase = 0;
+        scene.sceneOpacity = 1;
         scene._render = () => {};
         scene._resize();
         const initialScale = scene.positionWorldScale;

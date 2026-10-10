@@ -1,8 +1,8 @@
 # Three-Body Hello World
 
-基于 Vite + Three.js 的三体动画与镜面文字展示。
+基于 Vite + Three.js 的三体动画与粒子文字展示。
 
-支持鼠标左键或单指拖动视角，聚焦画布后也可使用 `Shift + 方向键`。
+支持鼠标左键或单指拖动视角，聚焦画布后也可使用 `Shift + 方向键`。文字由独立运动的粒子组成，受星体扰动后散开、绕流并缓慢归位。
 
 采用随机初态与平滑运动约束，减少长期逃逸和双星锁定；以视觉效果为主，不追求严格物理真实性。三轴等比例显示，不自动取景。
 
@@ -27,17 +27,18 @@ npm run dev
 │   ├── main.js                     # 场景启动入口
 │   ├── style.css                   # 页面样式
 │   ├── assets/
-│   │   └── helvetiker_bold.typeface.json  # 三维文字字体
+│   │   └── helvetiker_regular.typeface.json  # 三维文字字体
 │   ├── scene/
-│   │   ├── mirror-monument-scene.js # 场景生命周期与动画编排
+│   │   ├── three-body-scene.js # 场景生命周期与动画编排
 │   │   ├── body-visuals.js          # 天体与轨迹渲染
-│   │   ├── mirror-monument.js       # 镜面文字与反射
-│   │   └── viewport.js             # 视口与恢复投影计算
+│   │   ├── particle-monument.js     # 粒子字形与渲染
+│   │   ├── particle-motion.js       # 粒子受力与归位
+│   │   └── viewport.js             # 视口缩放与透视计算
 │   └── simulation/
 │       └── physics.js              # 三体物理模拟
 ├── test/
 │   ├── physics.test.js             # 物理模拟测试
-│   └── viewport.test.js            # 视口与恢复行为测试
+│   └── viewport.test.js            # 视口缩放与透视测试
 ├── package.json                    # 依赖与开发命令
 ├── package-lock.json               # 依赖版本锁定
 └── vite.config.js                  # 本地开发与预览配置

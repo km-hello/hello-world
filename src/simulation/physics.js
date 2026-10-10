@@ -29,12 +29,8 @@ export const DEFAULT_PHYSICS_CONFIG = Object.freeze({
     boundaryFull: 4.7,
     restoreStiffness: 1.5,
     maxRestoreAcceleration: 4.5,
-    boundaryDamping: 0,
-    recoveryOutwardSpeed: 0.25,
     maxAcceleration: 18,
-    softSpeedLimit: 3.2,
     hardSpeedLimit: 6,
-    speedDamping: 0,
     binaryCaptureDistance: 0.7,
     binaryIsolationDistance: 1.8,
     binaryCaptureDuration: 8,
@@ -57,8 +53,6 @@ export const GRAVITY_PHYSICS_CONFIG = Object.freeze({
     coreRepulsion: 0,
     restoreStiffness: 0,
     maxRestoreAcceleration: 0,
-    boundaryDamping: 0,
-    speedDamping: 0,
     binaryCaptureDistance: 0,
     // Zero disables these safety limits; non-finite states still reset.
     maxAcceleration: 0,
@@ -123,18 +117,9 @@ export class ThreeBodySystem {
         this._nextAccelerations = new Float64Array(STATE_SIZE);
         this._initialPositions = Float64Array.from(initialPositions);
         this._initialVelocities = Float64Array.from(initialVelocities);
-        this._recoveryUrgencies = new Float64Array(BODY_COUNT);
 
-        this.elapsedTime = 0;
         this.resetCount = 0;
         this.binaryInterventionCount = 0;
-        this.binaryControlStrength = 0;
-        this._binaryCandidatePair = -1;
-        this._binaryCandidateTime = 0;
-        this._binaryControlPair = -1;
-        this._binaryControlPhase = 0;
-        this._binaryControlPhaseTime = 0;
-        this._binaryControlCooldown = 0;
 
         this._validateConfiguration();
         this.reset();
@@ -174,8 +159,6 @@ export class ThreeBodySystem {
     reset() {
         this.positions.set(this._initialPositions);
         this.velocities.set(this._initialVelocities);
-        this._recoveryUrgencies.fill(0);
-        this.elapsedTime = 0;
         this._binaryCandidatePair = -1;
         this._binaryCandidateTime = 0;
         this._binaryControlPair = -1;
@@ -214,14 +197,6 @@ export class ThreeBodySystem {
         this._computeAccelerations(this.accelerations);
     }
 
-    setRecoveryUrgency(bodyIndex, urgency) {
-        if (bodyIndex < 0 || bodyIndex >= BODY_COUNT) {
-            return;
-        }
-
-        this._recoveryUrgencies[bodyIndex] = clamp(urgency, 0, 1);
-    }
-
     step(deltaTime) {
         if (!Number.isFinite(deltaTime) || deltaTime <= 0) {
             return true;
@@ -245,9 +220,8 @@ export class ThreeBodySystem {
             this.accelerations[index] = this._nextAccelerations[index];
         }
 
-        this._applySpeedSafety(deltaTime);
+        this._applySpeedSafety();
         this._updateBinaryController(deltaTime);
-        this.elapsedTime += deltaTime;
 
         if (!this._stateIsSafe()) {
             this.reset();
@@ -308,8 +282,6 @@ export class ThreeBodySystem {
             boundaryFull,
             restoreStiffness,
             maxRestoreAcceleration,
-            boundaryDamping,
-            recoveryOutwardSpeed,
             maxAcceleration,
         } = this.config;
         const softenedDistanceSquared = softening * softening;
@@ -368,41 +340,22 @@ export class ThreeBodySystem {
             const directionX = positionX * inverseRadius;
             const directionY = positionY * inverseRadius;
             const directionZ = positionZ * inverseRadius;
-            const radialVelocity =
-                this.velocities[offset] * directionX
-                + this.velocities[offset + 1] * directionY
-                + this.velocities[offset + 2] * directionZ;
-            const outwardProgress = smoothstep(
-                radialVelocity / Math.max(recoveryOutwardSpeed, Number.EPSILON),
-            );
-            const urgency = this._recoveryUrgencies[body] * outwardProgress;
-            const effectiveStart = boundaryStart * (1 - 0.65 * urgency);
-            const effectiveFull = Math.max(
-                effectiveStart + 0.01,
-                boundaryFull * (1 - 0.35 * urgency),
-            );
+            const fullBoundary = Math.max(boundaryStart + 0.01, boundaryFull);
 
-            if (radius > effectiveStart && radius > 0) {
+            if (radius > boundaryStart && radius > 0) {
                 const boundaryProgress = smoothstep(
-                    (radius - effectiveStart) / (effectiveFull - effectiveStart),
+                    (radius - boundaryStart) / (fullBoundary - boundaryStart),
                 );
-                const recoveryMultiplier = 1 + urgency;
-                const recoveryAcceleration = Math.min(
-                    maxRestoreAcceleration * recoveryMultiplier,
-                    restoreStiffness
-                        * (radius - effectiveStart)
-                        * boundaryProgress
-                        * recoveryMultiplier,
+                const restoreAcceleration = Math.min(
+                    maxRestoreAcceleration,
+                    restoreStiffness * (radius - boundaryStart) * boundaryProgress,
                 );
-                const outwardDamping = radialVelocity > 0
-                    ? boundaryDamping * boundaryProgress * radialVelocity * recoveryMultiplier
-                    : 0;
-                const totalRecovery = recoveryAcceleration + outwardDamping;
-
-                output[offset] -= directionX * totalRecovery;
-                output[offset + 1] -= directionY * totalRecovery;
-                output[offset + 2] -= directionZ * totalRecovery;
+                output[offset] -= directionX * restoreAcceleration;
+                output[offset + 1] -= directionY * restoreAcceleration;
+                output[offset + 2] -= directionZ * restoreAcceleration;
             }
+
+            if (maxAcceleration === 0) continue;
 
             const acceleration = Math.hypot(
                 output[offset],
@@ -410,7 +363,7 @@ export class ThreeBodySystem {
                 output[offset + 2],
             );
 
-            if (maxAcceleration > 0 && acceleration > maxAcceleration) {
+            if (acceleration > maxAcceleration) {
                 const safetyScale = maxAcceleration / acceleration;
                 output[offset] *= safetyScale;
                 output[offset + 1] *= safetyScale;
@@ -427,8 +380,7 @@ export class ThreeBodySystem {
         const controlledFirst = PAIR_FIRST[this._binaryControlPair];
         const controlledSecond = PAIR_SECOND[this._binaryControlPair];
         const isInternalPair =
-            (first === controlledFirst && second === controlledSecond)
-            || (first === controlledSecond && second === controlledFirst);
+            first === controlledFirst && second === controlledSecond;
         const targetScale = isInternalPair
             ? this.config.binaryInternalGravityScale
             : this.config.binaryExternalGravityScale;
@@ -436,12 +388,9 @@ export class ThreeBodySystem {
         return 1 + (targetScale - 1) * this.binaryControlStrength;
     }
 
-    _applySpeedSafety(deltaTime) {
-        const {
-            softSpeedLimit,
-            hardSpeedLimit,
-            speedDamping,
-        } = this.config;
+    _applySpeedSafety() {
+        const { hardSpeedLimit } = this.config;
+        if (hardSpeedLimit === 0) return;
 
         for (let body = 0; body < BODY_COUNT; body += 1) {
             const offset = body * AXIS_COUNT;
@@ -451,21 +400,8 @@ export class ThreeBodySystem {
                 this.velocities[offset + 2],
             );
 
-            if (speedDamping > 0 && speed > softSpeedLimit) {
-                const drag = Math.exp(-(speed - softSpeedLimit) * speedDamping * deltaTime);
-                this.velocities[offset] *= drag;
-                this.velocities[offset + 1] *= drag;
-                this.velocities[offset + 2] *= drag;
-            }
-
-            const dampedSpeed = Math.hypot(
-                this.velocities[offset],
-                this.velocities[offset + 1],
-                this.velocities[offset + 2],
-            );
-
-            if (hardSpeedLimit > 0 && dampedSpeed > hardSpeedLimit) {
-                const limitScale = hardSpeedLimit / dampedSpeed;
+            if (speed > hardSpeedLimit) {
+                const limitScale = hardSpeedLimit / speed;
                 this.velocities[offset] *= limitScale;
                 this.velocities[offset + 1] *= limitScale;
                 this.velocities[offset + 2] *= limitScale;
@@ -736,9 +672,3 @@ export function createVisualSystem(random = Math.random) {
         initialVelocities: DEFAULT_VELOCITIES.map((value) => value + (random() - 0.5) * 0.3),
     });
 }
-
-export const THREE_BODY_CONSTANTS = Object.freeze({
-    bodyCount: BODY_COUNT,
-    axisCount: AXIS_COUNT,
-    stateSize: STATE_SIZE,
-});

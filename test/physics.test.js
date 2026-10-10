@@ -171,7 +171,6 @@ test("unconstrained figure-eight conserves energy, momentum, and center of mass"
         restoreStiffness: 0,
         maxRestoreAcceleration: 0,
         maxAcceleration: 1_000_000,
-        softSpeedLimit: 100,
         hardSpeedLimit: 100,
         binaryCaptureDistance: 0,
         binaryCaptureDuration: 1_000_000,
@@ -289,7 +288,6 @@ test("gravity preset permits a persistent binary and escaping body without caps 
         0, orbitalSpeed, 0,
         0, 8, 0,
     ]);
-    system.setRecoveryUrgency(2, 1);
 
     for (let step = 0; step < 12 * 480; step += 1) {
         assert.equal(system.step(1 / 480), true);
@@ -363,49 +361,26 @@ test("soft boundary is inactive in the core and pulls inward outside it", () => 
     assert.equal(system.accelerations[2], 0);
 });
 
-test("offscreen urgency adds recovery only while a body moves outward", () => {
-    const system = new ThreeBodySystem({ gravityConstant: 0 });
-    const positions = [
-        1.5, 0, 0,
+test("soft boundary preserves its minimum transition width for small volumes", () => {
+    const system = new ThreeBodySystem({
+        gravityConstant: 0,
+        coreRepulsion: 0,
+        boundaryStart: 0,
+        boundaryFull: 0.001,
+    });
+    system.setState([
+        0.005, 0, 0,
         0, 0, 0,
         0, 0, 0,
-    ];
-    const outwardVelocities = [
-        1, 0, 0,
-        0, 0, 0,
-        0, 0, 0,
-    ];
+    ], new Float64Array(9));
 
-    system.setState(positions, outwardVelocities);
-    assert.equal(system.accelerations[0], 0);
-
-    system.setRecoveryUrgency(0, 1);
-    system.setState(positions, outwardVelocities);
-    assert.ok(system.accelerations[0] < 0);
-
-    const boundaryPositions = [
-        3.5, 0, 0,
-        0, 0, 0,
-        0, 0, 0,
-    ];
-    const inwardVelocities = [
-        -1, 0, 0,
-        0, 0, 0,
-        0, 0, 0,
-    ];
-
-    system.setRecoveryUrgency(0, 0);
-    system.setState(boundaryPositions, inwardVelocities);
-    const baseRecovery = system.accelerations[0];
-
-    system.setRecoveryUrgency(0, 1);
-    system.setState(boundaryPositions, inwardVelocities);
-    assert.equal(system.accelerations[0], baseRecovery);
+    assert.equal(system.accelerations[0], -system.config.restoreStiffness * 0.005 * 0.5);
+    assert.equal(system.accelerations[1], 0);
+    assert.equal(system.accelerations[2], 0);
 });
 
 test("a body moving outward beyond the boundary returns within eight seconds", () => {
     const system = new ThreeBodySystem({ gravityConstant: 0 });
-    system.setRecoveryUrgency(0, 1);
     system.setState([
         4.5, 0, 0,
         0, 0, 0,

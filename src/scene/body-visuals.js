@@ -9,7 +9,6 @@ import {
     Line,
     LineBasicMaterial,
     Object3D,
-    PointLight,
     Sprite,
     SpriteMaterial,
     SRGBColorSpace,
@@ -29,19 +28,13 @@ const FAR_STYLE_PERSPECTIVE = 0.44;
 const FULL_STYLE_PERSPECTIVE = 2.18;
 const TRAIL_POINT_CAPACITY = 40;
 const TRAIL_SAMPLE_INTERVAL = 1 / 30;
-const REFLECTION_MAX_ANGULAR_RADIUS = Math.PI / 24;
-const REFLECTION_NEAR_FADE_START = 0.1;
-const REFLECTION_NEAR_FADE_END = 0.42;
-const REFLECTION_HALO_OPACITY_SCALE = 0.45;
-const REFLECTION_CORE_OPACITY_SCALE = 0.7;
 const FAR_HALO_OPACITY = 0.46;
 const FAR_CORE_OPACITY = 0.58;
 
 const BODY_STYLES = Object.freeze([
     Object.freeze({
         color: 0x52ddff,
-        trailOpacity: 0.52,
-        lightIntensity: 15,
+        trailOpacity: 0.36,
         haloStops: Object.freeze([
             [0, "rgba(132, 241, 255, 0.78)"],
             [0.07, "rgba(91, 225, 255, 0.68)"],
@@ -63,8 +56,7 @@ const BODY_STYLES = Object.freeze([
     }),
     Object.freeze({
         color: 0xa87cff,
-        trailOpacity: 0.56,
-        lightIntensity: 17,
+        trailOpacity: 0.38,
         haloStops: Object.freeze([
             [0, "rgba(216, 190, 255, 0.78)"],
             [0.07, "rgba(188, 145, 255, 0.68)"],
@@ -86,8 +78,7 @@ const BODY_STYLES = Object.freeze([
     }),
     Object.freeze({
         color: 0xffaa5c,
-        trailOpacity: 0.58,
-        lightIntensity: 18,
+        trailOpacity: 0.4,
         haloStops: Object.freeze([
             [0, "rgba(255, 224, 166, 0.78)"],
             [0.07, "rgba(255, 196, 108, 0.68)"],
@@ -181,7 +172,7 @@ export class BodyVisuals {
         this._updateTrailGeometry();
     }
 
-    updateBodies(positions, reflectionProbePosition) {
+    updateBodies(positions) {
         this.camera.updateMatrixWorld();
 
         for (let body = 0; body < BODY_COUNT; body += 1) {
@@ -216,64 +207,11 @@ export class BodyVisuals {
 
             visual.halo.scale.set(diameter, diameter, 1);
             visual.halo.material.opacity = haloOpacity * cameraFade;
-            const coreDiameter = diameter * (0.27 + 0.12 * depthIntensity);
+            const coreDiameter = diameter * (0.22 + 0.1 * depthIntensity);
             visual.core.scale.set(coreDiameter, coreDiameter, 1);
             visual.core.material.opacity = coreOpacity * cameraFade;
-            visual.mainVisible = cameraFade > 0;
-            visual.halo.visible = visual.mainVisible;
-            visual.core.visible = visual.mainVisible;
-
-            // Reflection styling uses world depth independently of camera rotation.
-            const reflectionDepthIntensity = getDepthIntensity(
-                getVisualPerspective(
-                    this.cameraDistance - visual.group.position.z,
-                    this.cameraDistance,
-                ),
-            );
-            const originalDiameter = this.glowWorldDiameter
-                * (0.58 + 0.82 * reflectionDepthIntensity);
-            const reflectionDistance = reflectionProbePosition
-                ? visual.group.position.distanceTo(reflectionProbePosition)
-                : Number.POSITIVE_INFINITY;
-            const maximumReflectionDiameter = Number.isFinite(reflectionDistance)
-                ? 2
-                    * reflectionDistance
-                    * Math.tan(REFLECTION_MAX_ANGULAR_RADIUS)
-                : originalDiameter;
-            const reflectionDiameter = Math.min(
-                originalDiameter,
-                maximumReflectionDiameter,
-            );
-            const reflectionNearFade = Number.isFinite(reflectionDistance)
-                ? smoothstep(
-                    (reflectionDistance - REFLECTION_NEAR_FADE_START)
-                    / (REFLECTION_NEAR_FADE_END - REFLECTION_NEAR_FADE_START),
-                )
-                : 1;
-
-            visual.reflectionHalo.scale.set(
-                reflectionDiameter,
-                reflectionDiameter,
-                1,
-            );
-            visual.reflectionHalo.material.opacity =
-                (FAR_HALO_OPACITY
-                    + (0.95 - FAR_HALO_OPACITY) * reflectionDepthIntensity)
-                * REFLECTION_HALO_OPACITY_SCALE
-                * reflectionNearFade;
-            const reflectionCoreDiameter =
-                reflectionDiameter * (0.27 + 0.12 * reflectionDepthIntensity);
-            visual.reflectionCore.scale.set(
-                reflectionCoreDiameter,
-                reflectionCoreDiameter,
-                1,
-            );
-            visual.reflectionCore.material.opacity =
-                (FAR_CORE_OPACITY
-                    + (1 - FAR_CORE_OPACITY) * reflectionDepthIntensity)
-                * REFLECTION_CORE_OPACITY_SCALE
-                * reflectionNearFade;
-            visual.pointLight.intensity = BODY_STYLES[body].lightIntensity;
+            visual.halo.visible = cameraFade > 0;
+            visual.core.visible = cameraFade > 0;
         }
     }
 
@@ -311,17 +249,6 @@ export class BodyVisuals {
         this.trailSampleAccumulator = 0;
     }
 
-    setReflectionMode(enabled) {
-        for (const visual of this.visuals) {
-            visual.halo.visible = enabled ? false : visual.mainVisible;
-            visual.core.visible = enabled ? false : visual.mainVisible;
-            visual.reflectionHalo.visible = enabled
-                && visual.reflectionHalo.material.opacity > 0;
-            visual.reflectionCore.visible = enabled
-                && visual.reflectionCore.material.opacity > 0;
-        }
-    }
-
     dispose() {
         const spriteGeometry = this.visuals[0]?.halo.geometry;
 
@@ -331,8 +258,6 @@ export class BodyVisuals {
         for (const visual of this.visuals) {
             visual.core.material.dispose();
             visual.halo.material.dispose();
-            visual.reflectionCore.material.dispose();
-            visual.reflectionHalo.material.dispose();
         }
         for (const trail of this.trails) {
             trail.geometry.dispose();
@@ -359,6 +284,7 @@ export class BodyVisuals {
             const halo = new Sprite(
                 new SpriteMaterial({
                     map: haloTexture,
+                    color: 0xe0e0e0,
                     transparent: true,
                     opacity: 0.82,
                     blending: AdditiveBlending,
@@ -370,6 +296,7 @@ export class BodyVisuals {
             const core = new Sprite(
                 new SpriteMaterial({
                     map: coreTexture,
+                    color: 0xeeeeee,
                     transparent: true,
                     opacity: 0.9,
                     blending: AdditiveBlending,
@@ -378,49 +305,14 @@ export class BodyVisuals {
                     toneMapped: false,
                 }),
             );
-            const reflectionHalo = new Sprite(
-                new SpriteMaterial({
-                    map: haloTexture,
-                    transparent: true,
-                    opacity: 0,
-                    blending: AdditiveBlending,
-                    depthTest: true,
-                    depthWrite: false,
-                    toneMapped: false,
-                }),
-            );
-            const reflectionCore = new Sprite(
-                new SpriteMaterial({
-                    map: coreTexture,
-                    transparent: true,
-                    opacity: 0,
-                    blending: AdditiveBlending,
-                    depthTest: true,
-                    depthWrite: false,
-                    toneMapped: false,
-                }),
-            );
-            reflectionHalo.visible = false;
-            reflectionCore.visible = false;
-            const pointLight = new PointLight(
-                style.color,
-                style.lightIntensity,
-                // No cutoff: the constant-power emitter follows inverse-square
-                // falloff all the way into the distance.
-                0,
-                2,
-            );
-
-            group.add(halo, core, reflectionHalo, reflectionCore, pointLight);
+            const color = new Color(style.color);
+            group.add(halo, core);
             this.scene.add(group);
             this.visuals.push({
                 group,
                 core,
                 halo,
-                reflectionCore,
-                reflectionHalo,
-                pointLight,
-                mainVisible: true,
+                color,
             });
             this.textures.push(haloTexture, coreTexture);
 
@@ -436,7 +328,6 @@ export class BodyVisuals {
                 AXIS_COUNT,
             );
             const colorAttribute = new BufferAttribute(trailColors, AXIS_COUNT);
-            const trailColor = new Color(style.color);
 
             positionAttribute.setUsage(DynamicDrawUsage);
 
@@ -445,9 +336,9 @@ export class BodyVisuals {
                 const intensity = 0.015 + 0.985 * progress * progress;
                 const offset = point * AXIS_COUNT;
 
-                trailColors[offset] = trailColor.r * intensity;
-                trailColors[offset + 1] = trailColor.g * intensity;
-                trailColors[offset + 2] = trailColor.b * intensity;
+                trailColors[offset] = color.r * intensity;
+                trailColors[offset + 1] = color.g * intensity;
+                trailColors[offset + 2] = color.b * intensity;
             }
 
             trailGeometry.setAttribute("position", positionAttribute);
@@ -495,14 +386,8 @@ export class BodyVisuals {
             const attribute = this.trails[body].positionAttribute;
             const output = attribute.array;
 
-            for (let point = 0; point < TRAIL_POINT_CAPACITY; point += 1) {
-                const offset = point * AXIS_COUNT;
-
-                output[offset] = history[offset] * this.positionWorldScale;
-                output[offset + 1] =
-                    history[offset + 1] * this.positionWorldScale;
-                output[offset + 2] =
-                    history[offset + 2] * this.positionWorldScale;
+            for (let index = 0; index < history.length; index += 1) {
+                output[index] = history[index] * this.positionWorldScale;
             }
 
             attribute.needsUpdate = true;

@@ -1,20 +1,16 @@
-import { MirrorMonumentScene } from "./scene/mirror-monument-scene.js";
+import { ThreeBodyScene } from "./scene/three-body-scene.js";
 
 const canvas = document.querySelector("[data-three-body]");
 
 if (canvas) {
+    let monument;
     try {
-        const monument = new MirrorMonumentScene(canvas);
-
-        monument.start().catch((error) => {
-            console.error("Unable to start the mirror monument scene.", error);
-            monument.destroy();
-            document.body.classList.remove("scene-ready");
-            document.body.classList.add("scene-failed");
-            canvas.dataset.simulationState = "failed";
-        });
+        monument = new ThreeBodyScene(canvas);
+        await monument.start();
     } catch (error) {
-        console.error("WebGL mirror monument is unavailable.", error);
+        console.error("Unable to start the particle scene.", error);
+        monument?.destroy();
+        document.body.classList.remove("scene-ready");
         document.body.classList.add("scene-failed");
         canvas.dataset.simulationState = "failed";
     }

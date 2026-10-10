@@ -10,7 +10,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import { createVisualSystem } from "../simulation/physics.js";
 import { BodyVisuals } from "./body-visuals.js";
-import { MirrorMonument } from "./mirror-monument.js";
+import { ParticleMonument } from "./particle-monument.js";
 import { getPositionScale, getGlowScale } from "./viewport.js";
 
 const FIXED_TIME_STEP = 1 / 480;
@@ -21,10 +21,10 @@ const POSITION_DISPLAY_GAIN = 1.5;
 const CAMERA_FOV = 42;
 const CAMERA_NEAR_DISTANCE = 0.05;
 
-export class MirrorMonumentScene {
+export class ThreeBodyScene {
     constructor(canvas) {
         if (!(canvas instanceof HTMLCanvasElement)) {
-            throw new TypeError("MirrorMonumentScene requires a canvas element.");
+            throw new TypeError("ThreeBodyScene requires a canvas element.");
         }
 
         this.canvas = canvas;
@@ -38,7 +38,6 @@ export class MirrorMonumentScene {
         this.renderer.outputColorSpace = SRGBColorSpace;
         this.renderer.toneMapping = ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1;
-        this.renderer.setClearColor(0x000000, 1);
 
         this.scene = new Scene();
         this.scene.background = new Color(0x000000);
@@ -63,53 +62,47 @@ export class MirrorMonumentScene {
         this.system = createVisualSystem();
         this.motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
         this.bodyVisuals = null;
-        this.monument = new MirrorMonument(this.scene, this.renderer);
+        this.monument = new ParticleMonument(this.scene);
 
-        this.cssWidth = 0;
-        this.cssHeight = 0;
-        this.pixelRatio = 1;
-        this.pixelsPerWorldUnit = 1;
         this.positionWorldScale = 0;
         this.glowWorldDiameter = 1;
-        this.glowScale = 1;
         this.resizePending = true;
 
         this.accumulator = 0;
         this.lastTimestamp = 0;
         this.animationFrameId = null;
         this.sceneOpacity = 1;
-        this.transitionPhase = 0;
         this.starting = false;
         this.started = false;
         this.destroyed = false;
         this.manuallyPaused = false;
         this.pageSuspended = false;
+        this.contextLost = false;
 
         this._onAnimationFrame = this._onAnimationFrame.bind(this);
-        this._onVisibilityChange = this._onVisibilityChange.bind(this);
         this._onPageHide = this._onPageHide.bind(this);
         this._onPageShow = this._onPageShow.bind(this);
-        this._onMotionPreferenceChange = this._onMotionPreferenceChange.bind(this);
-        this._onFallbackResize = this._onFallbackResize.bind(this);
+        this._syncAnimationState = this._syncAnimationState.bind(this);
+        this._requestResize = this._requestResize.bind(this);
         this._onContextLost = this._onContextLost.bind(this);
+        this._onContextRestored = this._onContextRestored.bind(this);
         this._onControlsChange = this._onControlsChange.bind(this);
 
         this.controls.addEventListener("change", this._onControlsChange);
 
-        document.addEventListener("visibilitychange", this._onVisibilityChange);
+        document.addEventListener("visibilitychange", this._syncAnimationState);
         window.addEventListener("pagehide", this._onPageHide);
         window.addEventListener("pageshow", this._onPageShow);
-        this.motionPreference.addEventListener("change", this._onMotionPreferenceChange);
+        this.motionPreference.addEventListener("change", this._syncAnimationState);
         this.canvas.addEventListener("webglcontextlost", this._onContextLost);
+        this.canvas.addEventListener("webglcontextrestored", this._onContextRestored);
 
         if ("ResizeObserver" in window) {
-            this.resizeObserver = new ResizeObserver(() => {
-                this._requestResize();
-            });
+            this.resizeObserver = new ResizeObserver(this._requestResize);
             this.resizeObserver.observe(document.documentElement);
         } else {
             this.resizeObserver = null;
-            window.addEventListener("resize", this._onFallbackResize, { passive: true });
+            window.addEventListener("resize", this._requestResize, { passive: true });
         }
     }
 
@@ -134,15 +127,12 @@ export class MirrorMonumentScene {
             }
 
             this.bodyVisuals.resetTrails(this.system.positions);
-            this.bodyVisuals.updateBodies(
-                this.system.positions,
-                this.monument.reflectionProbePosition,
-            );
-            this.monument.updateReflection(this.bodyVisuals, true);
+            this.bodyVisuals.updateBodies(this.system.positions);
+            this.monument.update(this.bodyVisuals);
             this._render();
 
             this.started = true;
-            this.canvas.dataset.renderingMode = "webgl-mirror";
+            this.canvas.dataset.renderingMode = "webgl-particles";
             document.body.classList.add("scene-ready");
             this._syncAnimationState();
         } finally {
@@ -174,12 +164,13 @@ export class MirrorMonumentScene {
         this.controls.dispose();
         this.controls.cursorStyle = "auto";
 
-        document.removeEventListener("visibilitychange", this._onVisibilityChange);
+        document.removeEventListener("visibilitychange", this._syncAnimationState);
         window.removeEventListener("pagehide", this._onPageHide);
         window.removeEventListener("pageshow", this._onPageShow);
-        window.removeEventListener("resize", this._onFallbackResize);
-        this.motionPreference.removeEventListener("change", this._onMotionPreferenceChange);
+        window.removeEventListener("resize", this._requestResize);
+        this.motionPreference.removeEventListener("change", this._syncAnimationState);
         this.canvas.removeEventListener("webglcontextlost", this._onContextLost);
+        this.canvas.removeEventListener("webglcontextrestored", this._onContextRestored);
 
         if (this.resizeObserver) {
             this.resizeObserver.disconnect();
@@ -204,13 +195,10 @@ export class MirrorMonumentScene {
 
         this.resizePending = true;
 
-        if (this.animationFrameId === null && this.started) {
+        if (this.animationFrameId === null && this.started && !this.contextLost) {
             this._resize();
-            this.bodyVisuals.updateBodies(
-                this.system.positions,
-                this.monument.reflectionProbePosition,
-            );
-            this.monument.updateReflection(this.bodyVisuals, true);
+            this.bodyVisuals.updateBodies(this.system.positions);
+            this.monument.update(this.bodyVisuals);
             this._render();
         }
     }
@@ -235,13 +223,10 @@ export class MirrorMonumentScene {
             * Math.tan((CAMERA_FOV * Math.PI) / 360)
             * CAMERA_DISTANCE;
 
-        this.cssWidth = width;
-        this.cssHeight = height;
-        this.pixelRatio = pixelRatio;
-        this.pixelsPerWorldUnit = height / verticalWorldSpan;
-        this.glowScale = getGlowScale(width, height);
+        const pixelsPerWorldUnit = height / verticalWorldSpan;
+        const glowScale = getGlowScale(width, height);
         this.glowWorldDiameter =
-            (this.glowScale * 1.1) / this.pixelsPerWorldUnit;
+            (glowScale * 1.1) / pixelsPerWorldUnit;
         this.resizePending = false;
 
         this.renderer.setPixelRatio(pixelRatio);
@@ -249,25 +234,27 @@ export class MirrorMonumentScene {
         this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
         this.positionWorldScale =
-            getPositionScale(width, height) * POSITION_DISPLAY_GAIN / this.pixelsPerWorldUnit;
+            getPositionScale(width, height) * POSITION_DISPLAY_GAIN / pixelsPerWorldUnit;
         this.bodyVisuals?.resize(this.positionWorldScale, this.glowWorldDiameter);
         this.monument.resize(
             width,
-            this.pixelsPerWorldUnit,
-            isConstrained,
+            pixelsPerWorldUnit,
+            pixelRatio,
         );
     }
 
     _syncAnimationState() {
+        if (this.destroyed) return;
+
         this.controls.enabled =
             this.started
-            && !this.destroyed
+            && !this.contextLost
             && !this.pageSuspended
             && !document.hidden;
 
         const shouldAnimate =
             this.started
-            && !this.destroyed
+            && !this.contextLost
             && !this.manuallyPaused
             && !this.pageSuspended
             && !document.hidden
@@ -286,18 +273,21 @@ export class MirrorMonumentScene {
 
         this._cancelAnimationFrame();
 
+        if (this.contextLost) {
+            this.canvas.dataset.simulationState = "context-lost";
+            return;
+        }
+
         if (this.motionPreference.matches) {
             this.canvas.dataset.simulationState = "reduced-motion";
-        } else if (!this.destroyed) {
+        } else {
             this.canvas.dataset.simulationState = "paused";
         }
 
         if (!document.hidden && !this.pageSuspended && this.started) {
-            this.bodyVisuals.updateBodies(
-                this.system.positions,
-                this.monument.reflectionProbePosition,
-            );
-            this.monument.updateReflection(this.bodyVisuals, true);
+            if (this.resizePending) this._resize();
+            this.bodyVisuals.updateBodies(this.system.positions);
+            this.monument.update(this.bodyVisuals);
             this._render();
         }
     }
@@ -318,6 +308,7 @@ export class MirrorMonumentScene {
 
         if (
             this.destroyed
+            || this.contextLost
             || !this.started
             || this.manuallyPaused
             || this.pageSuspended
@@ -359,36 +350,29 @@ export class MirrorMonumentScene {
 
         if (!stateIsSafe) {
             this.sceneOpacity = 0;
-            this.transitionPhase = 2;
             this.bodyVisuals.resetTrails(this.system.positions);
         }
 
         this._advanceResetTransition(frameDelta);
         this.bodyVisuals.updateTrails(frameDelta, this.system.positions);
-        this.bodyVisuals.updateBodies(
-            this.system.positions,
-            this.monument.reflectionProbePosition,
-        );
-        this.monument.updateReflection(this.bodyVisuals);
+        this.bodyVisuals.updateBodies(this.system.positions);
+        this.monument.update(this.bodyVisuals, frameDelta);
         this._render();
         this.animationFrameId = requestAnimationFrame(this._onAnimationFrame);
     }
 
     _advanceResetTransition(frameDelta) {
-        if (this.transitionPhase === 0) {
+        if (this.sceneOpacity === 1) {
             return;
         }
 
         this.sceneOpacity = Math.min(1, this.sceneOpacity + frameDelta / 0.45);
-        if (this.sceneOpacity === 1) {
-            this.transitionPhase = 0;
-        }
 
         this.canvas.style.opacity = String(this.sceneOpacity);
     }
 
     _render() {
-        this.renderer.setRenderTarget(null);
+        if (this.contextLost || this.destroyed) return;
         this.renderer.render(this.scene, this.camera);
     }
 
@@ -404,15 +388,8 @@ export class MirrorMonumentScene {
             return;
         }
 
-        this.bodyVisuals.updateBodies(
-            this.system.positions,
-            this.monument.reflectionProbePosition,
-        );
+        this.bodyVisuals.updateBodies(this.system.positions);
         this._render();
-    }
-
-    _onVisibilityChange() {
-        this._syncAnimationState();
     }
 
     _onPageHide(event) {
@@ -429,17 +406,17 @@ export class MirrorMonumentScene {
         this._syncAnimationState();
     }
 
-    _onMotionPreferenceChange() {
+    _onContextLost(event) {
+        event.preventDefault();
+        if (this.destroyed) return;
+        this.contextLost = true;
         this._syncAnimationState();
     }
 
-    _onFallbackResize() {
-        this._requestResize();
-    }
-
-    _onContextLost(event) {
-        event.preventDefault();
-        this.pause();
-        this.canvas.dataset.simulationState = "context-lost";
+    _onContextRestored() {
+        if (this.destroyed) return;
+        this.contextLost = false;
+        this.resizePending = true;
+        this._syncAnimationState();
     }
 }
