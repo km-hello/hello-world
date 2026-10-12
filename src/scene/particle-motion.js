@@ -1,7 +1,7 @@
 const SPRING_STIFFNESS = 0.4;
 const VELOCITY_DAMPING = 0.95;
-const STAR_REPULSION = 18;
-const STAR_SWIRL = 4.5;
+const STAR_IMPACT_PER_SPEED = 6;
+const STAR_LATERAL_SPREAD = 0.35;
 const AMBIENT_FORCE = 0.055;
 const MAX_SUBSTEP = 1 / 120;
 
@@ -13,6 +13,8 @@ export class ParticleMotion {
         this.activity = new Float32Array(restPositions.length / 3);
         this.phases = new Float32Array(this.activity.length);
         this.mobility = new Float32Array(this.activity.length);
+        this.starDirections = new Float64Array(9);
+        this.starSpeeds = new Float64Array(3);
         this.time = 0;
         for (let particle = 0; particle < this.activity.length; particle += 1) {
             this.phases[particle] = particle * 2.399963229728653;
@@ -20,7 +22,7 @@ export class ParticleMotion {
         }
     }
 
-    update(starPositions, deltaTime, influenceRadius) {
+    update(starPositions, starVelocities, deltaTime, influenceRadius) {
         if (!(deltaTime > 0)) return;
 
         const delta = Math.min(deltaTime, 0.05);
@@ -29,6 +31,15 @@ export class ParticleMotion {
         const activityRise = 1 - Math.exp(-step / 0.12);
         const activityFall = 1 - Math.exp(-step / 2.4);
         const influenceRadiusSquared = influenceRadius * influenceRadius;
+        for (let star = 0; star < 3; star += 1) {
+            const velocity = starVelocities[star];
+            const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
+            const offset = star * 3;
+            this.starDirections[offset] = speed > 0 ? velocity.x / speed : 0;
+            this.starDirections[offset + 1] = speed > 0 ? velocity.y / speed : 0;
+            this.starDirections[offset + 2] = speed > 0 ? velocity.z / speed : 0;
+            this.starSpeeds[star] = speed;
+        }
 
         for (let substep = 0; substep < substeps; substep += 1) {
             this.time += step;
@@ -45,6 +56,8 @@ export class ParticleMotion {
                 let influence = 0;
 
                 for (let star = 0; star < 3; star += 1) {
+                    const speed = this.starSpeeds[star];
+                    if (speed === 0) continue;
                     let dx = x - starPositions[star].x;
                     let dy = y - starPositions[star].y;
                     let dz = z - starPositions[star].z;
@@ -54,31 +67,25 @@ export class ParticleMotion {
 
                     const proximity = 1 - distance / influenceRadius;
                     const strength = proximity * proximity * (3 - 2 * proximity);
-                    influence = Math.max(influence, strength);
+                    influence = Math.max(influence, strength * Math.min(1, speed / 3));
+                    const directionOffset = star * 3;
+                    const directionX = this.starDirections[directionOffset];
+                    const directionY = this.starDirections[directionOffset + 1];
+                    const directionZ = this.starDirections[directionOffset + 2];
                     if (distance > 0) {
                         dx /= distance;
                         dy /= distance;
                         dz /= distance;
                     } else {
-                        // Stable directions disperse coincident particles without random flicker.
-                        dx = Math.cos(phase);
-                        dy = Math.sin(phase);
-                        dz = 0;
+                        dx = directionX;
+                        dy = directionY;
+                        dz = directionZ;
                     }
-                    forceX += STAR_REPULSION * strength * dx;
-                    forceY += STAR_REPULSION * strength * dy;
-                    forceZ += STAR_REPULSION * strength * dz;
-                    const swirl = STAR_SWIRL * strength;
-                    if (star === 0) {
-                        forceX -= swirl * dy;
-                        forceY += swirl * dx;
-                    } else if (star === 1) {
-                        forceX -= swirl * dz;
-                        forceZ += swirl * dx;
-                    } else {
-                        forceY -= swirl * dz;
-                        forceZ += swirl * dy;
-                    }
+                    const projection = dx * directionX + dy * directionY + dz * directionZ;
+                    const impact = STAR_IMPACT_PER_SPEED * strength * speed;
+                    forceX += impact * (directionX + STAR_LATERAL_SPREAD * (dx - projection * directionX));
+                    forceY += impact * (directionY + STAR_LATERAL_SPREAD * (dy - projection * directionY));
+                    forceZ += impact * (directionZ + STAR_LATERAL_SPREAD * (dz - projection * directionZ));
                 }
 
                 this.velocities[offset] += (

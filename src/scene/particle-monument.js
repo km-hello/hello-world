@@ -4,6 +4,7 @@ import {
     BufferGeometry,
     Color,
     DynamicDrawUsage,
+    Matrix3,
     Mesh,
     Points,
     ShaderMaterial,
@@ -27,6 +28,8 @@ export class ParticleMonument {
         this.pixelRatio = 1;
         this.disposed = false;
         this.starPositions = Array.from({ length: 3 }, () => new Vector3(1000, 1000, 1000));
+        this.starVelocities = Array.from({ length: 3 }, () => new Vector3());
+        this.worldToLocalVelocity = new Matrix3();
         this.starColors = Array.from({ length: 3 }, () => new Color(0));
     }
 
@@ -146,7 +149,7 @@ export class ParticleMonument {
         return true;
     }
 
-    update(bodyVisuals, frameDelta = 0) {
+    update(bodyVisuals, frameDelta = 0, bodyVelocities) {
         if (!this.mesh || !bodyVisuals) return;
         this.mesh.updateMatrixWorld();
         for (let body = 0; body < 3; body += 1) {
@@ -155,7 +158,14 @@ export class ParticleMonument {
             this.starColors[body].copy(bodyVisuals.visuals[body].color);
         }
         if (frameDelta <= 0) return;
-        this.motion.update(this.starPositions, frameDelta, 2.0);
+        // Transform velocity without translation, preserving local distance per second.
+        this.worldToLocalVelocity.setFromMatrix4(this.mesh.matrixWorld).invert();
+        for (let body = 0; body < 3; body += 1) {
+            this.starVelocities[body].fromArray(bodyVelocities, body * 3)
+                .multiplyScalar(bodyVisuals.positionWorldScale)
+                .applyMatrix3(this.worldToLocalVelocity);
+        }
+        this.motion.update(this.starPositions, this.starVelocities, frameDelta, 2.0);
         this.mesh.geometry.attributes.position.needsUpdate = true;
         this.mesh.geometry.attributes.activity.needsUpdate = true;
     }

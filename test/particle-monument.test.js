@@ -25,3 +25,43 @@ test('paused particle lighting follows stars in local space without advancing mo
     monument.update(bodies, 0);
     assert.equal(monument.starPositions[0].length(), 0);
 });
+
+test('impact velocity follows the star in rotated, scaled text space without translation', () => {
+    const monument = new ParticleMonument(new Scene());
+    monument.mesh = new Object3D();
+    monument.mesh.rotation.set(-0.11, -0.14, 0.3);
+    monument.mesh.position.set(2, -1, 0.5);
+    monument.mesh.geometry = { attributes: { position: {}, activity: {} } };
+    const localVelocity = new Vector3(-2, 3, 1);
+    const bodies = {
+        positionWorldScale: 0.7,
+        visuals: [0, 1, 2].map(() => ({ group: { position: new Vector3() }, color: new Color() })),
+    };
+    const velocities = new Float64Array(9);
+    const cachedVelocities = monument.starVelocities.slice();
+    for (const scale of [0.4, 0.8]) {
+        monument.mesh.scale.setScalar(scale);
+        monument.mesh.updateMatrixWorld();
+        const worldOrigin = monument.mesh.localToWorld(new Vector3());
+        const worldVelocity = monument.mesh.localToWorld(localVelocity.clone()).sub(worldOrigin);
+        for (let body = 0; body < 3; body++) {
+            worldVelocity.clone().divideScalar(bodies.positionWorldScale).toArray(velocities, body * 3);
+        }
+        const before = velocities.slice();
+        let updates = 0;
+        monument.motion = { update(positions, localVelocities, delta, radius) {
+            updates++;
+            assert.equal(positions, monument.starPositions);
+            assert.equal(delta, 1 / 60);
+            assert.equal(radius, 2);
+            localVelocities.forEach((velocity, i) => {
+                assert.ok(velocity.distanceTo(localVelocity) < 1e-12);
+                assert.equal(velocity, cachedVelocities[i]);
+            });
+        } };
+        monument.update(bodies, 1 / 60, velocities);
+        assert.equal(updates, 1);
+        assert.deepEqual(velocities, before);
+        assert.equal(monument.mesh.geometry.attributes.position.needsUpdate, true);
+    }
+});

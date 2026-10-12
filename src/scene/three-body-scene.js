@@ -354,7 +354,7 @@ export class ThreeBodyScene {
         this._advanceCameraSway(frameDelta);
         this.bodyVisuals.updateTrails(frameDelta, this.system.positions);
         this.bodyVisuals.updateBodies(this.system.positions);
-        this.monument.update(this.bodyVisuals, frameDelta);
+        this.monument.update(this.bodyVisuals, frameDelta, this.system.velocities);
         this._render();
         this.animationFrameId = requestAnimationFrame(this._onAnimationFrame);
     }
