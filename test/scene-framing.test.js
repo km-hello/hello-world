@@ -14,6 +14,9 @@ test("escaping bodies keep moving without reframing; resize depends only on view
         scene.system = new ThreeBodySystem(GRAVITY_PHYSICS_CONFIG);
         scene.system.setState([0, 0, 0, 1, 0, 0, 100, 0, 0], [0, 0, 0, 0, 0, 0, 8, 0, 0]);
         scene.camera = new PerspectiveCamera(42, 1, 0.05, 60);
+        scene.camera.position.set(0, 0, 6);
+        scene.cameraSwayEnabled = true;
+        scene.cameraSwayTime = 0;
         scene.renderer = { setPixelRatio() {}, setSize() {} };
         scene.monument = { resize() {}, update() {} };
         let resizeCount = 0;

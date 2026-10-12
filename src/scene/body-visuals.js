@@ -1,19 +1,21 @@
 import {
     AdditiveBlending,
-    BufferAttribute,
-    BufferGeometry,
     CanvasTexture,
     Color,
+    CustomBlending,
     DynamicDrawUsage,
     LinearFilter,
-    Line,
-    LineBasicMaterial,
+    MaxEquation,
     Object3D,
     Sprite,
     SpriteMaterial,
     SRGBColorSpace,
     Vector3,
 } from "three";
+
+import { Line2 } from "three/addons/lines/Line2.js";
+import { LineGeometry } from "three/addons/lines/LineGeometry.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 
 import {
     getNearCameraFade,
@@ -24,12 +26,12 @@ const BODY_COUNT = 3;
 const AXIS_COUNT = 3;
 const CAMERA_NEAR_DISTANCE = 0.05;
 const CAMERA_FADE_FULL_OPACITY_DISTANCE = 0.45;
-const FAR_STYLE_PERSPECTIVE = 0.44;
-const FULL_STYLE_PERSPECTIVE = 2.18;
+const FAR_STYLE_PERSPECTIVE = 0.6;
+const FULL_STYLE_PERSPECTIVE = 1.5;
 const TRAIL_POINT_CAPACITY = 40;
 const TRAIL_SAMPLE_INTERVAL = 1 / 30;
-const FAR_HALO_OPACITY = 0.46;
-const FAR_CORE_OPACITY = 0.58;
+const FAR_HALO_OPACITY = 0.25;
+const FAR_CORE_OPACITY = 0.38;
 
 const BODY_STYLES = Object.freeze([
     Object.freeze({
@@ -316,50 +318,40 @@ export class BodyVisuals {
             });
             this.textures.push(haloTexture, coreTexture);
 
-            const trailPositions = new Float32Array(
-                TRAIL_POINT_CAPACITY * AXIS_COUNT,
-            );
-            const trailColors = new Float32Array(
-                TRAIL_POINT_CAPACITY * AXIS_COUNT,
-            );
-            const trailGeometry = new BufferGeometry();
-            const positionAttribute = new BufferAttribute(
-                trailPositions,
-                AXIS_COUNT,
-            );
-            const colorAttribute = new BufferAttribute(trailColors, AXIS_COUNT);
-
-            positionAttribute.setUsage(DynamicDrawUsage);
-
-            for (let point = 0; point < TRAIL_POINT_CAPACITY; point += 1) {
-                const progress = point / (TRAIL_POINT_CAPACITY - 1);
-                const intensity = 0.015 + 0.985 * progress * progress;
-                const offset = point * AXIS_COUNT;
-
-                trailColors[offset] = color.r * intensity;
-                trailColors[offset + 1] = color.g * intensity;
-                trailColors[offset + 2] = color.b * intensity;
-            }
-
-            trailGeometry.setAttribute("position", positionAttribute);
-            trailGeometry.setAttribute("color", colorAttribute);
-            const trailMaterial = new LineBasicMaterial({
+            const trailGeometry = new LineGeometry();
+            const initialPoints = new Float32Array(TRAIL_POINT_CAPACITY * AXIS_COUNT);
+            trailGeometry.setPositions(initialPoints);
+            trailGeometry.setColors(initialPoints);
+            const positionBuffer = trailGeometry.attributes.instanceStart.data;
+            const colorBuffer = trailGeometry.attributes.instanceColorStart.data;
+            positionBuffer.setUsage(DynamicDrawUsage);
+            colorBuffer.setUsage(DynamicDrawUsage);
+            trailGeometry.instanceCount = 0;
+            const trailMaterial = new LineMaterial({
+                worldUnits: true,
+                linewidth: this.glowWorldDiameter * 0.01,
                 vertexColors: true,
                 transparent: true,
                 opacity: style.trailOpacity,
-                blending: AdditiveBlending,
+                // Keep overlapping segment caps from becoming brighter than the trail.
+                blending: CustomBlending,
+                blendEquation: MaxEquation,
+                premultipliedAlpha: true,
                 depthTest: true,
                 depthWrite: false,
                 toneMapped: false,
             });
-            const trailLine = new Line(trailGeometry, trailMaterial);
+            const trailLine = new Line2(trailGeometry, trailMaterial);
 
+            // Keep MAX trails below additive glows and particles as the camera moves.
+            trailLine.renderOrder = -1;
             trailLine.frustumCulled = false;
             this.scene.add(trailLine);
             this.trails.push({
                 geometry: trailGeometry,
                 material: trailMaterial,
-                positionAttribute,
+                positionBuffer,
+                colorBuffer,
             });
             this.trailHistory.push(
                 new Float64Array(TRAIL_POINT_CAPACITY * AXIS_COUNT),
@@ -381,16 +373,61 @@ export class BodyVisuals {
     }
 
     _updateTrailGeometry() {
+        this.camera.updateMatrixWorld();
+
         for (let body = 0; body < BODY_COUNT; body += 1) {
             const history = this.trailHistory[body];
-            const attribute = this.trails[body].positionAttribute;
-            const output = attribute.array;
+            const trail = this.trails[body];
+            const color = this.visuals[body].color;
+            const output = trail.positionBuffer.array;
+            const colors = trail.colorBuffer.array;
+            let segmentCount = 0;
 
-            for (let index = 0; index < history.length; index += 1) {
-                output[index] = history[index] * this.positionWorldScale;
+            for (let point = 0; point < TRAIL_POINT_CAPACITY - 1; point += 1) {
+                const start = point * AXIS_COUNT;
+                const end = start + AXIS_COUNT;
+                // Repeated samples would make the thick-line shader normalize a zero vector.
+                if (history[start] === history[end]
+                    && history[start + 1] === history[end + 1]
+                    && history[start + 2] === history[end + 2]) {
+                    continue;
+                }
+
+                for (let endpoint = 0; endpoint < 2; endpoint += 1) {
+                    const historyOffset = (point + endpoint) * AXIS_COUNT;
+                    const outputOffset = segmentCount * 6 + endpoint * AXIS_COUNT;
+                    this.cameraSpacePosition.set(
+                        history[historyOffset] * this.positionWorldScale,
+                        history[historyOffset + 1] * this.positionWorldScale,
+                        history[historyOffset + 2] * this.positionWorldScale,
+                    );
+                    this.cameraSpacePosition.toArray(output, outputOffset);
+                    const forwardDistance = -this.cameraSpacePosition
+                        .applyMatrix4(this.camera.matrixWorldInverse).z;
+                    const perspective = clamp(
+                        getVisualPerspective(forwardDistance, this.cameraDistance),
+                        0.35,
+                        1.5,
+                    );
+                    const cameraFade = getNearCameraFade(
+                        forwardDistance,
+                        CAMERA_NEAR_DISTANCE,
+                        CAMERA_FADE_FULL_OPACITY_DISTANCE,
+                    );
+                    const progress = (point + endpoint) / (TRAIL_POINT_CAPACITY - 1);
+                    const intensity = (0.015 + 0.985 * progress * progress)
+                        * perspective * cameraFade;
+                    colors[outputOffset] = color.r * intensity;
+                    colors[outputOffset + 1] = color.g * intensity;
+                    colors[outputOffset + 2] = color.b * intensity;
+                }
+                segmentCount += 1;
             }
 
-            attribute.needsUpdate = true;
+            trail.geometry.instanceCount = segmentCount;
+            trail.material.linewidth = this.glowWorldDiameter * 0.01;
+            trail.positionBuffer.needsUpdate = true;
+            trail.colorBuffer.needsUpdate = true;
         }
     }
 }

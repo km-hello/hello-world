@@ -6,7 +6,7 @@ import {
     SRGBColorSpace,
     WebGLRenderer,
 } from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { PointerOrbitControls } from "./pointer-orbit-controls.js";
 
 import { createVisualSystem } from "../simulation/physics.js";
 import { BodyVisuals } from "./body-visuals.js";
@@ -49,14 +49,10 @@ export class ThreeBodyScene {
         );
         this.camera.position.set(0, 0, CAMERA_DISTANCE);
         this.camera.lookAt(0, 0, 0);
+        this.cameraSwayEnabled = true;
+        this.cameraSwayTime = 0;
 
-        this.controls = new OrbitControls(this.camera, canvas);
-        this.controls.enabled = false;
-        this.controls.enableZoom = false;
-        this.controls.enablePan = false;
-        this.controls.mouseButtons.MIDDLE = null;
-        this.controls.mouseButtons.RIGHT = null;
-        this.controls.cursorStyle = "grab";
+        this.controls = new PointerOrbitControls(this.camera, canvas);
 
         this.system = createVisualSystem();
         this.motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -86,8 +82,10 @@ export class ThreeBodyScene {
         this._onContextLost = this._onContextLost.bind(this);
         this._onContextRestored = this._onContextRestored.bind(this);
         this._onControlsChange = this._onControlsChange.bind(this);
+        this._onControlsStart = this._onControlsStart.bind(this);
 
         this.controls.addEventListener("change", this._onControlsChange);
+        this.controls.addEventListener("start", this._onControlsStart);
 
         document.addEventListener("visibilitychange", this._syncAnimationState);
         window.addEventListener("pagehide", this._onPageHide);
@@ -160,8 +158,8 @@ export class ThreeBodyScene {
 
         this.controls.enabled = false;
         this.controls.removeEventListener("change", this._onControlsChange);
+        this.controls.removeEventListener("start", this._onControlsStart);
         this.controls.dispose();
-        this.controls.cursorStyle = "auto";
 
         document.removeEventListener("visibilitychange", this._syncAnimationState);
         window.removeEventListener("pagehide", this._onPageHide);
@@ -353,11 +351,26 @@ export class ThreeBodyScene {
         }
 
         this._advanceResetTransition(frameDelta);
+        this._advanceCameraSway(frameDelta);
         this.bodyVisuals.updateTrails(frameDelta, this.system.positions);
         this.bodyVisuals.updateBodies(this.system.positions);
         this.monument.update(this.bodyVisuals, frameDelta);
         this._render();
         this.animationFrameId = requestAnimationFrame(this._onAnimationFrame);
+    }
+
+    _advanceCameraSway(frameDelta) {
+        if (!this.cameraSwayEnabled || frameDelta <= 0) return;
+
+        this.cameraSwayTime += frameDelta;
+        const azimuth = Math.sin(this.cameraSwayTime * Math.PI * 2 / 24) * Math.PI / 30;
+        const elevation = Math.sin(this.cameraSwayTime * Math.PI * 2 / 32) * Math.PI / 60;
+        this.camera.position.setFromSphericalCoords(
+            CAMERA_DISTANCE,
+            Math.PI / 2 - elevation,
+            azimuth,
+        );
+        this.camera.lookAt(0, 0, 0);
     }
 
     _advanceResetTransition(frameDelta) {
@@ -375,6 +388,10 @@ export class ThreeBodyScene {
         this.renderer.render(this.scene, this.camera);
     }
 
+    _onControlsStart() {
+        this.cameraSwayEnabled = false;
+    }
+
     _onControlsChange() {
         if (
             !this.started
@@ -387,6 +404,7 @@ export class ThreeBodyScene {
             return;
         }
 
+        this.bodyVisuals.updateTrails(0, this.system.positions);
         this.bodyVisuals.updateBodies(this.system.positions);
         this._render();
     }

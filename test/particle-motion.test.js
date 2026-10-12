@@ -27,6 +27,35 @@ test("near stars scatter particles radially with swirl while distant particles o
     assert.equal(motion.activity[1], 0);
 });
 
+test("stars at or beyond the influence boundary leave only ambient motion", () => {
+    for (const distance of [RADIUS, RADIUS + 0.01]) {
+        const boundary = new ParticleMotion(new Float32Array([0, 0, 0]));
+        const ambient = new ParticleMotion(new Float32Array([0, 0, 0]));
+        const stars = [{ x: distance, y: 0, z: 0 }, ...FAR_STARS.slice(1)];
+        boundary.update(stars, 1 / 120, RADIUS);
+        ambient.update(FAR_STARS, 1 / 120, RADIUS);
+        assert.deepEqual(boundary.positions, ambient.positions);
+        assert.deepEqual(boundary.velocities, ambient.velocities);
+        assert.deepEqual(boundary.activity, ambient.activity);
+    }
+
+    const inside = new ParticleMotion(new Float32Array([0, 0, 0]));
+    inside.update([{ x: RADIUS - 0.01, y: 0, z: 0 }, ...FAR_STARS.slice(1)], 1 / 120, RADIUS);
+    assert.ok(inside.activity[0] > 0);
+});
+
+test("coincident particles disperse in stable directions without nonfinite state", () => {
+    const stars = [{ x: 0, y: 0, z: 0 }, ...FAR_STARS.slice(1)];
+    const first = new ParticleMotion(new Float32Array([0, 0, 0]));
+    const second = new ParticleMotion(new Float32Array([0, 0, 0]));
+    first.update(stars, 1 / 120, RADIUS);
+    second.update(stars, 1 / 120, RADIUS);
+    assert.deepEqual(first.positions, second.positions);
+    assert.ok(first.positions[0] > 0 && first.positions[1] > 0);
+    assert.ok(first.activity[0] > 0);
+    for (const value of [...first.positions, ...first.velocities]) assert.ok(Number.isFinite(value));
+});
+
 test("particles return to the text and slowly lose activity when stars leave", () => {
     const motion = new ParticleMotion(new Float32Array([0, 0, 0]));
     advance(motion, NEAR_STARS, 0.2);

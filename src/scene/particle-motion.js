@@ -28,6 +28,7 @@ export class ParticleMotion {
         const step = delta / substeps;
         const activityRise = 1 - Math.exp(-step / 0.12);
         const activityFall = 1 - Math.exp(-step / 2.4);
+        const influenceRadiusSquared = influenceRadius * influenceRadius;
 
         for (let substep = 0; substep < substeps; substep += 1) {
             this.time += step;
@@ -47,8 +48,9 @@ export class ParticleMotion {
                     let dx = x - starPositions[star].x;
                     let dy = y - starPositions[star].y;
                     let dz = z - starPositions[star].z;
-                    const distance = Math.hypot(dx, dy, dz);
-                    if (distance >= influenceRadius) continue;
+                    const distanceSquared = dx * dx + dy * dy + dz * dz;
+                    if (distanceSquared >= influenceRadiusSquared) continue;
+                    const distance = Math.sqrt(distanceSquared);
 
                     const proximity = 1 - distance / influenceRadius;
                     const strength = proximity * proximity * (3 - 2 * proximity);
