@@ -96,11 +96,11 @@ export class ThreeBodyScene {
 
         if ("ResizeObserver" in window) {
             this.resizeObserver = new ResizeObserver(this._requestResize);
-            this.resizeObserver.observe(document.documentElement);
+            this.resizeObserver.observe(this.canvas);
         } else {
             this.resizeObserver = null;
-            window.addEventListener("resize", this._requestResize, { passive: true });
         }
+        window.addEventListener("resize", this._requestResize, { passive: true });
     }
 
     async start() {
@@ -201,17 +201,13 @@ export class ThreeBodyScene {
     }
 
     _resize() {
-        const width = Math.max(
-            1,
-            document.documentElement.clientWidth || window.innerWidth,
-        );
-        const height = Math.max(
-            1,
-            window.innerHeight || document.documentElement.clientHeight,
-        );
+        const width = Math.max(1, this.canvas.clientWidth);
+        const height = Math.max(1, this.canvas.clientHeight);
+        this.controls.rotated = getComputedStyle(this.canvas)
+            .getPropertyValue("--scene-rotated").trim() === "1";
         const devicePixelRatio = window.devicePixelRatio || 1;
         const isConstrained =
-            width < 720
+            Math.min(width, height) < 720
             || (Number.isFinite(navigator.deviceMemory) && navigator.deviceMemory <= 4);
         const maximumPixelRatio = isConstrained ? 1.2 : 1.5;
         const pixelRatio = Math.min(devicePixelRatio, maximumPixelRatio);

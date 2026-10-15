@@ -80,3 +80,36 @@ test("touch cancellation, lost capture, disabling and disposal end dragging and 
         assert.equal(canvas.style.cursor, "auto");
     }
 });
+
+test("rotated dragging maps screen movement into the same logical canvas movement", () => {
+    const normal = setup();
+    const rotated = setup();
+    assert.equal(normal.controls.rotated, false);
+    rotated.controls.rotated = true;
+    for (const fixture of [normal, rotated]) {
+        fixture.controls.enabled = true;
+        fixture.emit("pointerdown", { pointerType: "touch" });
+    }
+    normal.emit("pointermove", { clientX: 140, clientY: 120 });
+    rotated.emit("pointermove", { clientX: 80, clientY: 140 });
+    assert.ok(normal.camera.position.distanceTo(rotated.camera.position) < 1e-12);
+    for (const fixture of [normal, rotated]) fixture.controls.dispose();
+});
+
+test("orientation changes cancel active capture while unchanged orientation preserves dragging", () => {
+    const { controls, camera, captures, emit } = setup();
+    controls.enabled = true;
+    emit("pointerdown");
+    controls.rotated = false;
+    assert.equal(captures.size, 1);
+    controls.rotated = true;
+    assert.equal(captures.size, 0);
+    const position = camera.position.clone();
+    emit("pointermove", { clientX: 300 });
+    assert.ok(camera.position.equals(position));
+    emit("pointerdown");
+    assert.equal(captures.size, 1);
+    controls.rotated = false;
+    assert.equal(captures.size, 0);
+    controls.dispose();
+});

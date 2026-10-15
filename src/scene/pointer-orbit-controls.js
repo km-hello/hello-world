@@ -8,6 +8,7 @@ export class PointerOrbitControls extends EventDispatcher {
         this.spherical = new Spherical();
         this.pointerId = null;
         this._enabled = false;
+        this._rotated = false;
         this._onPointerDown = this._onPointerDown.bind(this);
         this._onPointerMove = this._onPointerMove.bind(this);
         this._onPointerEnd = this._onPointerEnd.bind(this);
@@ -28,6 +29,16 @@ export class PointerOrbitControls extends EventDispatcher {
         this.canvas.style.cursor = value ? "grab" : "auto";
     }
 
+    get rotated() {
+        return this._rotated;
+    }
+
+    set rotated(value) {
+        if (value === this._rotated) return;
+        this._rotated = value;
+        this._endDrag();
+    }
+
     _onPointerDown(event) {
         if (!this.enabled || !event.isPrimary || event.button !== 0 || this.pointerId !== null) return;
         this.canvas.setPointerCapture(event.pointerId);
@@ -41,9 +52,11 @@ export class PointerOrbitControls extends EventDispatcher {
     _onPointerMove(event) {
         if (event.pointerId !== this.pointerId) return;
         const scale = 2 * Math.PI / Math.max(1, this.canvas.clientHeight);
+        const dx = event.clientX - this.x;
+        const dy = event.clientY - this.y;
         this.spherical.setFromVector3(this.camera.position);
-        this.spherical.theta -= (event.clientX - this.x) * scale;
-        this.spherical.phi -= (event.clientY - this.y) * scale;
+        this.spherical.theta -= (this.rotated ? dy : dx) * scale;
+        this.spherical.phi -= (this.rotated ? -dx : dy) * scale;
         this.spherical.makeSafe();
         this.camera.position.setFromSpherical(this.spherical);
         this.camera.lookAt(0, 0, 0);
